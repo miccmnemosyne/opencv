@@ -26,7 +26,7 @@
 //
 //   * Redistribution's in binary form must reproduce the above copyright notice,
 //     this list of conditions and the following disclaimer in the documentation
-//     and/or other oclMaterials provided with the distribution.
+//     and/or other materials provided with the distribution.
 //
 //   * The name of the copyright holders may not be used to endorse or promote products
 //     derived from this software without specific prior written permission.
@@ -54,7 +54,7 @@ using namespace std;
 
 #define MAX_CHANNELS 4
 
-PARAM_TEST_CASE(MergeTestBase, MatType, int, bool)
+PARAM_TEST_CASE(MergeTestBase, MatDepth, Channels, bool)
 {
     int type;
     int channels;
@@ -254,11 +254,11 @@ OCL_TEST_P(Split, Accuracy)
 
 
 INSTANTIATE_TEST_CASE_P(SplitMerge, Merge, Combine(
-                            Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F), Range(1, 5), Bool()));
+                            Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F), Values(1, 2, 3, 4), Bool()));
 
 
 INSTANTIATE_TEST_CASE_P(SplitMerge, Split , Combine(
-                            Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F), Range(1, 5), Bool()));
+                            Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F), Values(1, 2, 3, 4), Bool()));
 
 
 #endif // HAVE_OPENCL

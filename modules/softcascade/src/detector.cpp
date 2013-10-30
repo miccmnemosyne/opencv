@@ -41,6 +41,7 @@
 //M*/
 
 #include "precomp.hpp"
+#include "opencv2/softcascade_fast.hpp"
 
 cv::softcascade::Detection::Detection(const cv::Rect& b, const float c, int k)
 : x(static_cast<ushort>(b.x)), y(static_cast<ushort>(b.y)),
@@ -594,3 +595,13 @@ void cv::softcascade::Detector::detect(InputArray _image, InputArray _rois,  Out
         confPtr[i] = (*it).confidence;
     }
 }
+
+
+// ========================================================================== //
+//     Implementation of DetectorFast (with trace evaluation reduction)
+// ========================================================================== //
+
+cv::softcascade::DetectorFast::DetectorFast(const double mins, const double maxs, const int nsc, const int rej)
+: Detector(mins,maxs,nsc,rej) {}
+
+cv::softcascade::DetectorFast::~DetectorFast() {}

@@ -48,7 +48,10 @@
 #include "opencv2/core.hpp"
 #include "opencv2/core/cuda.hpp"
 
+
 namespace cv { namespace softcascade {
+
+class CV_EXPORTS_W DetectorFast;
 
 // Representation of detectors result.
 // We assume that image is less then 2^16x2^16.
@@ -177,6 +180,7 @@ public:
     // Param confs is an output array of confidence for detected objects. i-th bounding rectangle corresponds i-th confidence.
     CV_WRAP virtual void detect(InputArray image, InputArray rois, OutputArray rects, OutputArray confs) const;
 
+    friend class DetectorFast;
 private:
     void detectNoRoi(const Mat& image, std::vector<Detection>& objects) const;
 
@@ -191,7 +195,7 @@ private:
 };
 
 // ========================================================================== //
-//     Public Interface for singe soft (stageless) cascade octave training.
+//     Public Interface for single soft (stageless) cascade octave training.
 // ========================================================================== //
 class CV_EXPORTS Octave : public cv::Algorithm
 {
@@ -294,7 +298,5 @@ private:
     int flags;
 };
 
-
-}} // namespace cv { namespace softcascade {
-
+}}
 #endif

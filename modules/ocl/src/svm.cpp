@@ -25,7 +25,7 @@
 //
 //   * Redistribution's in binary form must reproduce the above copyright notice,
 //     this list of conditions and the following disclaimer in the documentation
-//     and/or other oclMaterials provided with the distribution.
+//     and/or other materials provided with the distribution.
 //
 //   * The name of the copyright holders may not be used to endorse or promote products
 //     derived from this software without specific prior written permission.
@@ -46,7 +46,7 @@
 #include "opencl_kernels.hpp"
 
 // TODO Remove this after HAVE_CLAMDBLAS eliminating
-#ifdef __GNUC__
+#if defined(__GNUC__) && (__GNUC__ == 4) && (__GNUC_MINOR__ == 8)
 #  pragma GCC diagnostic ignored "-Wunused-but-set-variable"
 #endif
 

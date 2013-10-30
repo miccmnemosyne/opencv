@@ -32,6 +32,10 @@ else(NOT CMAKE_TOOLCHAIN_FILE)
 endif(NOT CMAKE_TOOLCHAIN_FILE)
 
 
+if(POLICY CMP0022)
+  cmake_policy(SET CMP0022 OLD)
+endif()
+
 # must go before the project command
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "Configs" FORCE)
 if(DEFINED CMAKE_BUILD_TYPE)
@@ -45,6 +49,8 @@ if(MSVC)
 endif()
 
 include(cmake/OpenCVUtils.cmake)
+
+ocv_clear_vars(OpenCVModules_TARGETS)
 
 # ----------------------------------------------------------------------------
 # Break in case of popular CMake configuration mistakes
@@ -134,6 +140,7 @@ OCV_OPTION(WITH_QT             "Build with Qt Backend support"               OFF
 OCV_OPTION(WITH_WIN32UI        "Build with Win32 UI Backend support"         ON   IF WIN32 )
 OCV_OPTION(WITH_QUICKTIME      "Use QuickTime for Video I/O insted of QTKit" OFF  IF APPLE )
 OCV_OPTION(WITH_TBB            "Include Intel TBB support"                   OFF  IF (NOT IOS) )
+OCV_OPTION(WITH_OPENMP         "Include OpenMP support"                      OFF)
 OCV_OPTION(WITH_CSTRIPES       "Include C= support"                          OFF  IF WIN32 )
 OCV_OPTION(WITH_TIFF           "Include TIFF support"                        ON   IF (NOT IOS) )
 OCV_OPTION(WITH_UNICAP         "Include Unicap support (GPL)"                OFF  IF (UNIX AND NOT APPLE AND NOT ANDROID) )
@@ -423,6 +430,18 @@ endif()
 # --- Matlab/Octave ---
 include(cmake/OpenCVFindMatlab.cmake)
 
+# ----------------------------------------------------------------------------
+# Add CUDA libraries (needed for apps/tools, samples)
+# ----------------------------------------------------------------------------
+if(HAVE_CUDA)
+  set(OPENCV_LINKER_LIBS ${OPENCV_LINKER_LIBS} ${CUDA_LIBRARIES} ${CUDA_npp_LIBRARY})
+  if(HAVE_CUBLAS)
+    set(OPENCV_LINKER_LIBS ${OPENCV_LINKER_LIBS} ${CUDA_cublas_LIBRARY})
+  endif()
+  if(HAVE_CUFFT)
+    set(OPENCV_LINKER_LIBS ${OPENCV_LINKER_LIBS} ${CUDA_cufft_LIBRARY})
+  endif()
+endif()
 # ----------------------------------------------------------------------------
 # Solution folders:
 # ----------------------------------------------------------------------------
@@ -826,11 +845,10 @@ endif()
 if(HAVE_OPENCL)
   status("")
   status("  OpenCL:")
-  set(__opencl_ver "invalid")
-  if(HAVE_OPENCL12)
-    set(__opencl_ver "1.2")
-  elseif(HAVE_OPENCL11)
-    set(__opencl_ver "1.1")
+  if(HAVE_OPENCL_STATIC)
+    set(__opencl_ver "static")
+  else()
+    set(__opencl_ver "dynamic")
   endif()
   status("    Version:"       ${__opencl_ver})
   if(OPENCL_INCLUDE_DIR)

@@ -52,6 +52,7 @@
 namespace cv { namespace softcascade {
 
 class CV_EXPORTS_W DetectorFast;
+class CV_EXPORTS_W DetectorTrace;
 
 // Representation of detectors result.
 // We assume that image is less then 2^16x2^16.
@@ -181,6 +182,7 @@ public:
     CV_WRAP virtual void detect(InputArray image, InputArray rois, OutputArray rects, OutputArray confs) const;
 
     friend class DetectorFast;
+    friend class DetectorTrace;
 private:
     void detectNoRoi(const Mat& image, std::vector<Detection>& objects) const;
 

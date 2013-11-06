@@ -52,7 +52,7 @@ cv::Rect cv::softcascade::Detection::bb() const
     return cv::Rect(x, y, w, h);
 }
 
-namespace {
+//namespace {
 
 struct SOctave
 {
@@ -215,7 +215,7 @@ struct ChannelStorage
     }
 };
 
-}
+//}
 
 struct cv::softcascade::Detector::Fields
 {
@@ -596,12 +596,319 @@ void cv::softcascade::Detector::detect(InputArray _image, InputArray _rois,  Out
     }
 }
 
+//************************NEW CLASSES IMPLEMENTED BY Federico Bartoli*****************************************************
 
-// ========================================================================== //
-//     Implementation of DetectorFast (with trace evaluation reduction)
-// ========================================================================== //
 
-cv::softcascade::DetectorFast::DetectorFast(const double mins, const double maxs, const int nsc, const int rej)
-: Detector(mins,maxs,nsc,rej) {}
+// ============================================================================================================== //
+//		     Implementation of DetectorFast (with trace evaluation reduction)
+// ============================================================================================================= //
+
+cv::softcascade::DetectorFast::DetectorFast(const double mins, const double maxs, const int nsc, const int rej,uint maxNumStage)
+: Detector(mins,maxs,nsc,rej),lastStage(maxNumStage) {}
 
 cv::softcascade::DetectorFast::~DetectorFast() {}
+
+bool cv::softcascade::DetectorFast::loadModel(const FileNode& fileNodeModel){
+
+	// save recjection criteria and octave'paramters for restore it later
+	tempI.rejCriteria=rejCriteria;
+
+	tempI.index=new int[fields->octaves.size()];
+	tempI.weaks=new int[fields->octaves.size()];
+
+	for(uint i=0;i<fields->octaves.size();i++){
+		tempI.index[i]=fields->octaves[i].index;
+		tempI.weaks[i]=fields->octaves[i].weaks;
+	}
+
+
+	return true;
+}
+
+bool cv::softcascade::DetectorFast::load(const FileNode& fileNode,const FileNode& fileNodeModel)
+{
+	return Detector::load(fileNode)&&loadModel(fileNodeModel);
+}
+
+void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image, std::vector<Detection>& objects)
+{
+
+
+	// set new recjection criteria and octave'paramters for tracerestore it later
+	rejCriteria=NO_REJECT;
+	for (uint i=0;i<fields->octaves.size();i++){
+		fields->octaves[i].index=(int)(fields->octaves[i].weaks*fields->octaves[i].index)/lastStage;
+		fields->octaves[i].weaks= lastStage;
+	}
+
+	std::vector<uint> levelsI;
+
+
+	uint partialSize;
+
+    // only color images are suppered
+    cv::Mat image = _image.getMat();
+    CV_Assert(image.type() == CV_8UC3);
+
+
+    fields->calcLevels(image.size(),(float) minScale, (float)maxScale, scales);
+    objects.clear();
+
+//--- Execution detection phase with NO_REJECT (detectNoROI function) -
+
+	Fields& fld = *fields;
+    // create integrals
+    ChannelStorage storage(image, fld.shrinkage, fld.featureTypeStr);
+
+    typedef std::vector<Level>::const_iterator lIt;
+    for (lIt it = fld.levels.begin(); it != fld.levels.end(); ++it)
+    {
+        const Level& level = *it;
+
+        // we train only 3 scales.
+        if (level.origScale > 2.5) break;
+
+        partialSize=objects.size();
+        for (int dy = 0; dy < level.workRect.height; ++dy)
+        {
+            for (int dx = 0; dx < level.workRect.width; ++dx)
+            {
+                storage.offset = (int)(dy * storage.step + dx);
+                fld.detectAt(dx, dy, level, storage, objects);
+            }
+        }
+        levelsI.insert(levelsI.end(),objects.size()-partialSize,it-fld.levels.begin());
+    }
+
+//-------------------------------------------------------------------
+
+//----------- Restore recjection criteria and octave'paramters ------
+	rejCriteria=tempI.rejCriteria;
+	for (uint i=0;i<fields->octaves.size();i++){
+		fields->octaves[i].index=tempI.index[i];
+		fields->octaves[i].weaks= tempI.weaks[i];
+	}
+//--------------------------------------------------------------------
+//----------- Estimate the final score for each trace in objects-----
+
+
+//--------------------------------------------------------------------
+
+
+	if (rejCriteria != NO_REJECT) suppress(rejCriteria, objects);
+}
+
+// ============================================================================================================== //
+//		     Implementation of DetectorTrace (without trace evaluation reduction) and other structures nedded
+// ============================================================================================================= //
+
+struct ConfidenceGtTrace
+{
+    bool operator()(const cv::softcascade::Trace& a, const cv::softcascade::Trace& b) const
+    {
+        return a.detection.confidence > b.detection.confidence;
+    }
+};
+// detect local maximum, maintaining the rest of traces
+void DollarNMSTrace(std::vector<cv::softcascade::Trace>& positiveTrace)
+{
+
+	std::vector<cv::softcascade::Trace> objects=positiveTrace;
+
+    static const float DollarThreshold = 0.65f;
+    std::sort(objects.begin(), objects.end(), ConfidenceGtTrace());
+
+    for (std::vector<cv::softcascade::Trace>::iterator dIt = objects.begin(); dIt != objects.end(); ++dIt)
+    {
+        const Detection &a = dIt->detection;
+        positiveTrace[dIt->index].classType=cv::softcascade::Trace::LOCALMAXIMUM;
+
+        for (std::vector<cv::softcascade::Trace>::iterator next = dIt + 1; next != objects.end(); )
+        {
+            const Detection &b = next->detection;
+
+            const float ovl =  overlap(a.bb(), b.bb()) / std::min(a.bb().area(), b.bb().area());
+
+            if (ovl > DollarThreshold){
+            	positiveTrace[next->index].localMaxIndex=dIt->index;
+            	next = objects.erase(next);
+            }
+            else
+                ++next;
+        }
+    }
+}
+
+
+cv::softcascade::Trace::Trace(const uint64 ind,const uint octave, const uint level, const Detection& dw, const std::vector<float>& scores, const int classification)
+ :index(ind),octaveIndex(octave),numLevel(level),detection(dw.bb(),dw.confidence,dw.kind), subscores(scores),classType(classification) {localMaxIndex=-1;}
+
+
+cv::softcascade::DetectorTrace::DetectorTrace(const double mins, const double maxs, const int nsc, const int rej)
+: Detector(mins,maxs,nsc,rej) {traceType2Return= ALL_TR;}
+
+cv::softcascade::DetectorTrace::~DetectorTrace() {}
+
+void cv::softcascade::DetectorTrace::detectAtTrace(const int dx, const int dy, const Level& level, const ChannelStorage& storage, std::vector<Trace>& positiveTrace,std::vector<Trace>& negativeTrace, uint levelI)
+{
+
+    float detectionScore = 0.f;
+
+//    Level level= *(static_cast<Level*>(lv));
+//    ChannelStorage storage= *(static_cast<ChannelStorage*>(stg));
+
+
+    const SOctave& octave = *(level.octave);
+
+    int stBegin = octave.index * octave.weaks, stEnd = stBegin + octave.weaks;
+
+    std::vector<float> subScores;
+
+    for(int st = stBegin; st < stEnd; ++st)
+    {
+
+        const Weak& weak = fields->weaks[st];
+
+        int nId = st * 3;
+
+        // work with root node
+        const Node& node = fields->nodes[nId];
+        const Feature& feature = fields->features[node.feature];
+
+        cv::Rect scaledRect(feature.rect);
+
+        float threshold = level.rescale(scaledRect, node.threshold, (int)(feature.channel > 6)) * feature.rarea;
+        float sum = storage.get(feature.channel, scaledRect);
+        int next = (sum >= threshold)? 2 : 1;
+
+        // leaves
+        const Node& leaf = fields->nodes[nId + next];
+        const Feature& fLeaf = fields->features[leaf.feature];
+
+        scaledRect = fLeaf.rect;
+        threshold = level.rescale(scaledRect, leaf.threshold, (int)(fLeaf.channel > 6)) * fLeaf.rarea;
+        sum = storage.get(fLeaf.channel, scaledRect);
+
+        int lShift = (next - 1) * 2 + ((sum >= threshold) ? 1 : 0);
+        float impact = fields->leaves[(st * 4) + lShift];
+
+        detectionScore += impact;
+        subScores.push_back(impact);
+
+        if (detectionScore <= weak.threshold){
+        	if(traceType2Return!=POSITIVE_TR){
+        		int shrinkage = 4;//(*octave).shrinkage;
+        		cv::Rect rect(cvRound(dx * shrinkage), cvRound(dy * shrinkage), level.objSize.width, level.objSize.height);
+
+        		negativeTrace.push_back(cv::softcascade::Trace(
+        				static_cast<uint64>(negativeTrace.size()),octave.index,levelI,cv::softcascade::Detection(rect, detectionScore),subScores,Trace::NEGATIVE));
+        	}
+        	return;
+        }
+    }
+
+    //content of the function level.addDetection()
+    //  level.addDetection(dx, dy, detectionScore, detections);
+
+	// fix me
+	int shrinkage = 4;//(*octave).shrinkage;
+	cv::Rect rect(cvRound(dx * shrinkage), cvRound(dy * shrinkage), level.objSize.width, level.objSize.height);
+
+
+	if (detectionScore > 0 ){
+		if(traceType2Return!=NEGATIVE_TR)
+		positiveTrace.push_back(cv::softcascade::Trace(
+				static_cast<uint64>(positiveTrace.size()),octave.index,levelI,cv::softcascade::Detection(rect, detectionScore),subScores,Trace::POSITIVE));
+
+	}
+	else if(traceType2Return!=POSITIVE_TR)
+		negativeTrace.push_back(cv::softcascade::Trace(
+				static_cast<uint64>(negativeTrace.size()),octave.index,levelI,cv::softcascade::Detection(rect, detectionScore),subScores,Trace::NEGATIVE));
+}
+
+
+void cv::softcascade::DetectorTrace::detectNoRoiTrace(const cv::Mat& image, std::vector<Trace>& positiveTrace,std::vector<Trace>& negativeTrace)
+{
+    Fields& fld = *fields;
+    // create integrals
+    ChannelStorage storage(image, fld.shrinkage, fld.featureTypeStr);
+
+    typedef std::vector<Level>::const_iterator lIt;
+    for (lIt it = fld.levels.begin(); it != fld.levels.end(); ++it)
+    {
+        const Level& level = *it;
+
+        // we train only 3 scales.
+        if (level.origScale > 2.5) break;
+
+        for (int dy = 0; dy < level.workRect.height; ++dy)
+        {
+            for (int dx = 0; dx < level.workRect.width; ++dx)
+            {
+                storage.offset = (int)(dy * storage.step + dx);
+                detectAtTrace(dx,dy,level,storage,positiveTrace,negativeTrace,it-fld.levels.begin());
+            }
+        }
+    }
+
+    if (traceType2Return != NEGATIVE_TR) DollarNMSTrace(positiveTrace);
+}
+
+void cv::softcascade::DetectorTrace::detectTrace(InputArray _image, InputArray _rois, std::vector<Trace>& positiveTrace,std::vector<Trace>& negativeTrace, int traceType)
+{
+
+	//assign the type of trace to return
+	traceType2Return=traceType;
+
+    // only color images are suppered
+    cv::Mat image = _image.getMat();
+    CV_Assert(image.type() == CV_8UC3);
+
+    Fields& fld = *fields;
+    fld.calcLevels(image.size(),(float) minScale, (float)maxScale, scales);
+
+    // initialize result's vector
+    positiveTrace.clear();
+    negativeTrace.clear();
+
+    if (_rois.empty())
+        return detectNoRoiTrace(image, positiveTrace,negativeTrace);
+
+    int shr = fld.shrinkage;
+
+    cv::Mat roi = _rois.getMat();
+    cv::Mat mask(image.rows / shr, image.cols / shr, CV_8UC1);
+
+    mask.setTo(cv::Scalar::all(0));
+    cv::Rect* r = roi.ptr<cv::Rect>(0);
+    for (int i = 0; i < (int)roi.cols; ++i)
+        cv::Mat(mask, cv::Rect(r[i].x / shr, r[i].y / shr, r[i].width / shr , r[i].height / shr)).setTo(cv::Scalar::all(1));
+
+    // create integrals
+    ChannelStorage storage(image, shr, fld.featureTypeStr);
+
+    typedef std::vector<Level>::const_iterator lIt;
+    for (lIt it = fld.levels.begin(); it != fld.levels.end(); ++it)
+    {
+         const Level& level = *it;
+
+        // we train only 3 scales.
+        if (level.origScale > 2.5) break;
+
+         for (int dy = 0; dy < level.workRect.height; ++dy)
+         {
+             uchar* m  = mask.ptr<uchar>(dy);
+             for (int dx = 0; dx < level.workRect.width; ++dx)
+             {
+                 if (m[dx])
+                 {
+                     storage.offset = (int)(dy * storage.step + dx);
+                     detectAtTrace(dx, dy, level, storage, positiveTrace,negativeTrace,it-fld.levels.begin());
+                 }
+             }
+         }
+    }
+
+    if (traceType2Return != NEGATIVE_TR) DollarNMSTrace(positiveTrace);
+}
+

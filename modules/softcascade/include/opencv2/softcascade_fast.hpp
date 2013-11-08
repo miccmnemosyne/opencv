@@ -9,10 +9,12 @@
 #define SOFTCASCADE_FAST_HPP_
 
 #include "softcascade.hpp"
+#include <map>
 
 
 struct Level;
 struct ChannelStorage;
+
 
 namespace cv { namespace softcascade {
 
@@ -20,6 +22,58 @@ namespace cv { namespace softcascade {
 // ============================================================================================================== //
 //					     Declaration of DetectorFast (with trace evaluation reduction)
 // ============================================================================================================= //
+
+struct CV_EXPORTS FastDtModel
+{
+	FastDtModel();
+
+    void write(cv::FileStorage& fso) const;
+    void read(const cv::FileNode& node);
+
+    // Interface for Trace-Model
+    void addTraceForTraceModel(uint stage,uint level,const std::vector<Point2d>& trace);
+    void computeTraceModel();
+    bool getSlopeAt(uint stage,uint level,double& slope);
+
+
+    // List of octaves of the soft cascade (in logarithmic scale)
+    std::vector<int> octaves;
+
+    // List of levels of the soft cascade
+    std::vector<double> levels;
+
+
+private:
+    struct TraceModel{
+#define Vx  0
+#define Vy  1
+
+    	typedef std::map<uint,std::map<uint,std::vector<Vec4f> > > LinesMap;
+    	typedef std::map<uint,std::vector<Vec4f> >  LevelsMap;
+    	typedef std::map<uint,std::map<uint,double > > SlopesMap;
+
+
+    	TraceModel(){}
+
+    	void compute();
+    	void write(FileStorage& fso) const;
+    	void read(const FileNode& node);
+
+    	//output line parameter in affine coordinate
+    	//stage->level->lines
+    	//std::map<uint,std::map<uint,std::vector<Vec4f> > > linesParam;
+    	//std::map<uint,std::map<uint,double> > slopes;
+    	LinesMap linesParam;
+    	SlopesMap slopes;
+
+    }traceModel;
+};
+
+// required for cv::FileStorage serialization
+void write(cv::FileStorage& fso, const std::string&, const FastDtModel& x);
+void read(const cv::FileNode& node, FastDtModel& x, const FastDtModel& default_value);
+std::ostream& operator<<(std::ostream& out, const FastDtModel& m);
+
 
 class CV_EXPORTS_W DetectorFast: public Detector{
 
@@ -47,7 +101,7 @@ public:
     virtual void detectFast(cv::InputArray _image,std::vector<Detection>& objects);
 
 
-
+    CV_WRAP uint getNumLevels();
 private:
 
     // Load trace-model

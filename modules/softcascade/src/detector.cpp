@@ -42,6 +42,7 @@
 
 #include "precomp.hpp"
 #include "opencv2/softcascade_fast.hpp"
+#include <opencv2/imgproc.hpp>
 
 cv::softcascade::Detection::Detection(const cv::Rect& b, const float c, int k)
 : x(static_cast<ushort>(b.x)), y(static_cast<ushort>(b.y)),
@@ -602,6 +603,114 @@ void cv::softcascade::Detector::detect(InputArray _image, InputArray _rois,  Out
 // ============================================================================================================== //
 //		     Implementation of DetectorFast (with trace evaluation reduction)
 // ============================================================================================================= //
+void cv::softcascade::FastDtModel::TraceModel::compute(){
+
+
+	slopes.clear();
+
+	double slopeSum;
+
+	for(LinesMap::iterator itS=linesParam.begin();itS!=linesParam.end();++itS){
+		for(LevelsMap::iterator itL=itS->second.begin();itL!=itS->second.end();++itL){
+			slopeSum=0.;
+			for (std::vector<Vec4f>::iterator it=itL->second.begin();it!=itL->second.end();++it)
+				slopeSum+=it->val[Vy]/it->val[Vx];
+			slopes[itS->first][itL->first]=slopeSum/(double)itS->second.size();
+		}
+	}
+}
+void cv::softcascade::FastDtModel::TraceModel::write(FileStorage& fso) const{
+
+	fso << "TraceModel" <<  "{";
+	fso << "LastStages" <<  "[";
+
+
+	SlopesMap::const_iterator itS= slopes.begin();
+	for( ;itS!=slopes.end();++itS){
+
+		fso << "lastStage" << (int)itS->first;
+		fso << "Levels" << "[";
+		for(std::map<uint,double >::const_iterator itL=itS->second.begin();itL!=itS->second.end();++itL){
+			fso<< "level" << (int)itL->first;
+			fso<< "slope" << itL->second;
+		}
+		fso<< "]";
+	}
+
+	fso<< "]";
+	fso<< "TraceModel" <<  "}";
+
+}
+void cv::softcascade::FastDtModel::TraceModel::read(const FileNode& node){
+
+	FileNode LastStageN = node["LastStages"];
+	slopes.clear();
+
+	for(FileNodeIterator itS=LastStageN.begin();itS!=LastStageN.end();++itS){
+		int stage=(int)(*itS)["lastStage"];
+		FileNode Levels = (*itS)["Levels"];
+
+		for(FileNodeIterator itL=Levels.begin();itL!=Levels.end();++itL){
+			slopes[stage][(int)(*itL)["level"]]=(double)(*itL)["slope"];
+		}
+	}
+	linesParam.clear();
+}
+bool cv::softcascade::FastDtModel::getSlopeAt(uint stage,uint level,double& slope){
+	try{
+		slope= traceModel.slopes.at(stage).at(level);
+		return true;
+	}
+	catch (Exception& e) {
+		return false;
+	}
+}
+cv::softcascade::FastDtModel::FastDtModel()
+{octaves.clear();levels.clear();
+}
+
+
+void cv::softcascade::FastDtModel::FastDtModel::write(cv::FileStorage& fso) const{
+
+	traceModel.write(fso);
+
+}
+void cv::softcascade::FastDtModel::FastDtModel::read(const cv::FileNode& node){
+	traceModel.read(node["TraceModel"]);
+}
+
+
+
+void write(cv::FileStorage& fso, const std::string&, const cv::softcascade::FastDtModel& x){
+
+	x.write(fso);
+}
+
+void read(const cv::FileNode& node, cv::softcascade::FastDtModel& x, const cv::softcascade::FastDtModel& default_value){
+
+	if(node.empty())
+		x=default_value;
+	else
+		x.read(node);
+}
+
+
+void cv::softcascade::FastDtModel::addTraceForTraceModel(uint stage,uint level,const std::vector<Point2d>& trace){
+
+
+	Vec4f line; //(vx,vy,x0,y0)
+	fitLine(trace,line,cv::DIST_L2,0,0.01,0.01);
+
+	traceModel.linesParam[stage][level].push_back(Vec4f(line));
+}
+
+void cv::softcascade::FastDtModel::computeTraceModel(){
+	traceModel.compute();
+}
+
+
+
+
 
 cv::softcascade::DetectorFast::DetectorFast(const double mins, const double maxs, const int nsc, const int rej,uint maxNumStage)
 : Detector(mins,maxs,nsc,rej),lastStage(maxNumStage) {}
@@ -696,6 +805,10 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image, std::vecto
 
 
 	if (rejCriteria != NO_REJECT) suppress(rejCriteria, objects);
+}
+
+inline uint cv::softcascade::DetectorFast::getNumLevels(){
+	return fields->levels.size();
 }
 
 // ============================================================================================================== //

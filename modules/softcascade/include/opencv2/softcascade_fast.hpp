@@ -25,6 +25,7 @@ namespace cv { namespace softcascade {
 
 struct CV_EXPORTS FastDtModel
 {
+	FastDtModel(uint numLevels);
 	FastDtModel();
 
     void write(cv::FileStorage& fso) const;
@@ -35,13 +36,15 @@ struct CV_EXPORTS FastDtModel
     void computeTraceModel();
     bool getSlopeAt(uint stage,uint level,double& slope);
 
+    void getLastSt(std::vector<uint>& stages);
+    bool getLevelsForStage(uint  lastStage, std::vector<uint>& levels);
 
     // List of octaves of the soft cascade (in logarithmic scale)
     std::vector<int> octaves;
-
     // List of levels of the soft cascade
     std::vector<double> levels;
 
+    uint numLevels;
 
 private:
     struct TraceModel{
@@ -70,8 +73,16 @@ private:
 };
 
 // required for cv::FileStorage serialization
-void write(cv::FileStorage& fso, const std::string&, const FastDtModel& x);
-void read(const cv::FileNode& node, FastDtModel& x, const FastDtModel& default_value);
+inline void write(cv::FileStorage& fso, const std::string&, const FastDtModel& x){
+	x.write(fso);
+}
+inline void read(const cv::FileNode& node, FastDtModel& x, const FastDtModel& default_value){
+	if(node.empty())
+		x=default_value;
+	else
+		x.read(node);
+
+}
 std::ostream& operator<<(std::ostream& out, const FastDtModel& m);
 
 
@@ -84,32 +95,29 @@ public:
     // Param minScale 		is a maximum scale relative to the original size of the image on which cascade will be applied.
     // Param scales 		is a number of scales from minScale to maxScale.
     // Param rejCriteria 	is used for NMS.
-    CV_WRAP DetectorFast(double minScale = 0.4, double maxScale = 5., int scales = 55, int rejCriteria = 1,uint maxNumStages=1024/2);
+    CV_WRAP DetectorFast(double minScale = 0.4, double maxScale = 5., int scales = 55, int rejCriteria = 1);
 
     CV_WRAP ~DetectorFast();
 
     // Load soft cascade from FileNode and trace-model.
     // Param fileNode 		is a root node for cascade.
     // Param fileNodeModel 	is a root node for trace-model.
-    CV_WRAP virtual bool load(const FileNode& fileNode,const FileNode& fileNodeModel);
+    CV_WRAP virtual bool load(const FileNode& cascadeModel,const FileNode& fastModel);
 
 
     // Return the vector of Detection objects (with fast evaluation).
     // Param image is a frame on which detector will be applied.
     // Param rois is a vector of regions of interest. Only the objects that fall into one of the regions will be returned.
     // Param objects is an output array of Detections
-    virtual void detectFast(cv::InputArray _image,std::vector<Detection>& objects);
+    virtual void detectFast(cv::InputArray _image,std::vector<Detection>& objects, uint lastStage);
 
 
     CV_WRAP uint getNumLevels();
 private:
 
     // Load trace-model
-    CV_WRAP virtual bool loadModel(const FileNode& fileNodeModel);
+    CV_WRAP virtual bool loadModel(const FileNode& fastNode);
 
-
-    // Last Stage evaluated, after is estimated the final score through trace-model
-    uint	lastStage;
 
 	struct CV_EXPORTS TempInfo{
     	int rejCriteria;
@@ -118,7 +126,7 @@ private:
     };
 
 	TempInfo tempI;
-
+	FastDtModel fastModel;
 };
 
 
@@ -143,7 +151,7 @@ struct CV_EXPORTS Trace{
 	uint64 	index;
 	uint64 	localMaxIndex;
 	uint 	octaveIndex;
-	uint 	numLevel;
+	uint 	levelIndex;
 	Detection detection;
 	std::vector<float> subscores;
 	int classType;
@@ -164,7 +172,7 @@ public:
     CV_WRAP ~DetectorTrace();
 
     // Type of traces to return
-    enum{NEGATIVE_TR=0,POSITIVE_TR,ALL_TR};
+    enum{NEGATIVE_TR=0,POSITIVE_TR,LOCALMAXIMUM_TR,NEG_POS_TR};
 
     // Return the vector of Trace objects.
     // Param image 			is a frame on which detector will be applied.
@@ -172,7 +180,7 @@ public:
     // Param positiveTrace 	is an output array of Positive Traces (eventually included local-maxima)
     // Param negativeTrace 	is an output array of Positive Traces
     // Param traceType 		is an output array of Trace
-    virtual void detectTrace(InputArray image, InputArray rois, std::vector<Trace>& positiveTrace,std::vector<Trace>& negativeTrace, int traceType=cv::softcascade::DetectorTrace::ALL_TR);
+    virtual void detectTrace(InputArray image, InputArray rois, std::vector<Trace>& positiveTrace,std::vector<Trace>& negativeTrace, int traceType=cv::softcascade::DetectorTrace::LOCALMAXIMUM_TR);
 
 private:
     void detectNoRoiTrace(const Mat& image, std::vector<Trace>& positiveTrace,std::vector<Trace>& negativeTrace);

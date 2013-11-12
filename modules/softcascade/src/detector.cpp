@@ -615,38 +615,41 @@ void cv::softcascade::FastDtModel::TraceModel::compute(){
 			slopeSum=0.;
 			for (std::vector<Vec4f>::iterator it=itL->second.begin();it!=itL->second.end();++it)
 				slopeSum+=it->val[Vy]/it->val[Vx];
-			slopes[itS->first][itL->first]=slopeSum/(double)itS->second.size();
+			slopes[itS->first][itL->first]=slopeSum/(double)itL->second.size();
 		}
 	}
 }
 void cv::softcascade::FastDtModel::TraceModel::write(FileStorage& fso) const{
 
-	fso << "TraceModel" <<  "{";
 	fso << "LastStages" <<  "[";
 
 
 	SlopesMap::const_iterator itS= slopes.begin();
 	for( ;itS!=slopes.end();++itS){
-
-		fso << "lastStage" << (int)itS->first;
+		fso << "{";
+		fso<< "lastStage" << (int)itS->first;
 		fso << "Levels" << "[";
 		for(std::map<uint,double >::const_iterator itL=itS->second.begin();itL!=itS->second.end();++itL){
+			fso<<"{";
 			fso<< "level" << (int)itL->first;
 			fso<< "slope" << itL->second;
+			fso<<"}";
 		}
 		fso<< "]";
+		fso << "}";
 	}
 
 	fso<< "]";
-	fso<< "TraceModel" <<  "}";
 
 }
 void cv::softcascade::FastDtModel::TraceModel::read(const FileNode& node){
 
-	FileNode LastStageN = node["LastStages"];
+
+	FileNode lastStages = (node["Trace_Model"])["LastStages"];
+
 	slopes.clear();
 
-	for(FileNodeIterator itS=LastStageN.begin();itS!=LastStageN.end();++itS){
+	for(FileNodeIterator itS=lastStages.begin();itS!=lastStages.end();++itS){
 		int stage=(int)(*itS)["lastStage"];
 		FileNode Levels = (*itS)["Levels"];
 
@@ -665,33 +668,55 @@ bool cv::softcascade::FastDtModel::getSlopeAt(uint stage,uint level,double& slop
 		return false;
 	}
 }
+
+void cv::softcascade::FastDtModel::getLastSt(std::vector<uint>& stages){
+	stages.clear();
+
+	for(TraceModel::SlopesMap::iterator itS=traceModel.slopes.begin();itS!=traceModel.slopes.end();++itS)
+		stages.push_back(itS->first);
+
+}
+
+bool cv::softcascade::FastDtModel::getLevelsForStage(uint  lastStage, std::vector<uint>& levels){
+	levels.clear();
+
+
+
+	try{
+		std::map<uint,double > lv= traceModel.slopes.at(lastStage);
+		for(std::map<uint,double >::iterator itL=lv.begin();itL!=lv.end();++itL)
+			levels.push_back(itL->first);
+		return true;
+	}
+	catch (Exception& e) {
+		return false;
+	}
+}
+
+cv::softcascade::FastDtModel::FastDtModel(uint numL)
+: numLevels(numL)
+{	octaves.clear();
+	levels.clear();
+}
 cv::softcascade::FastDtModel::FastDtModel()
-{octaves.clear();levels.clear();
+{	octaves.clear();
+	levels.clear();
 }
 
 
 void cv::softcascade::FastDtModel::FastDtModel::write(cv::FileStorage& fso) const{
 
-	traceModel.write(fso);
+	fso<<"{";
+		fso<<"Trace_Model"<< "{";
+		traceModel.write(fso);
+		fso<< "}";
+
+	fso<< "}";
 
 }
 void cv::softcascade::FastDtModel::FastDtModel::read(const cv::FileNode& node){
-	traceModel.read(node["TraceModel"]);
-}
 
-
-
-void write(cv::FileStorage& fso, const std::string&, const cv::softcascade::FastDtModel& x){
-
-	x.write(fso);
-}
-
-void read(const cv::FileNode& node, cv::softcascade::FastDtModel& x, const cv::softcascade::FastDtModel& default_value){
-
-	if(node.empty())
-		x=default_value;
-	else
-		x.read(node);
+	traceModel.read(node["Models"]);
 }
 
 
@@ -710,14 +735,12 @@ void cv::softcascade::FastDtModel::computeTraceModel(){
 
 
 
-
-
-cv::softcascade::DetectorFast::DetectorFast(const double mins, const double maxs, const int nsc, const int rej,uint maxNumStage)
-: Detector(mins,maxs,nsc,rej),lastStage(maxNumStage) {}
+cv::softcascade::DetectorFast::DetectorFast(double mins, double maxs, int nsc, int rej)
+:Detector(mins, maxs, nsc, rej){}
 
 cv::softcascade::DetectorFast::~DetectorFast() {}
 
-bool cv::softcascade::DetectorFast::loadModel(const FileNode& fileNodeModel){
+bool cv::softcascade::DetectorFast::loadModel(const FileNode& fastNode){
 
 	// save recjection criteria and octave'paramters for restore it later
 	tempI.rejCriteria=rejCriteria;
@@ -731,17 +754,23 @@ bool cv::softcascade::DetectorFast::loadModel(const FileNode& fileNodeModel){
 	}
 
 
+
+	try{
+		fastNode >> fastModel;
+	}catch (Exception& e) {
+		return false;
+	}
+
 	return true;
 }
 
-bool cv::softcascade::DetectorFast::load(const FileNode& fileNode,const FileNode& fileNodeModel)
+bool cv::softcascade::DetectorFast::load(const FileNode& cascadeModel,const FileNode& fastModel)
 {
-	return Detector::load(fileNode)&&loadModel(fileNodeModel);
+	return Detector::load(cascadeModel)&&loadModel(fastModel);
 }
 
-void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image, std::vector<Detection>& objects)
+void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector<Detection>& objects, uint lastStage)
 {
-
 
 	// set new recjection criteria and octave'paramters for tracerestore it later
 	rejCriteria=NO_REJECT;
@@ -750,10 +779,8 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image, std::vecto
 		fields->octaves[i].weaks= lastStage;
 	}
 
-	std::vector<uint> levelsI;
-
-
-	uint partialSize;
+	uint currentSize;
+	double slope;
 
     // only color images are suppered
     cv::Mat image = _image.getMat();
@@ -777,7 +804,7 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image, std::vecto
         // we train only 3 scales.
         if (level.origScale > 2.5) break;
 
-        partialSize=objects.size();
+        currentSize=objects.size();
         for (int dy = 0; dy < level.workRect.height; ++dy)
         {
             for (int dx = 0; dx < level.workRect.width; ++dx)
@@ -786,7 +813,13 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image, std::vecto
                 fld.detectAt(dx, dy, level, storage, objects);
             }
         }
-        levelsI.insert(levelsI.end(),objects.size()-partialSize,it-fld.levels.begin());
+//############# Compute the final score for each positive dw ###########
+        fastModel.getSlopeAt(lastStage,it-fld.levels.begin(),slope);
+
+        for(uint i=currentSize;i<objects.size();i++){
+        	objects[i].confidence+=(1024+1-lastStage)*slope;
+        }
+//######################################################################
     }
 
 //-------------------------------------------------------------------
@@ -798,10 +831,7 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image, std::vecto
 		fields->octaves[i].weaks= tempI.weaks[i];
 	}
 //--------------------------------------------------------------------
-//----------- Estimate the final score for each trace in objects-----
 
-
-//--------------------------------------------------------------------
 
 
 	if (rejCriteria != NO_REJECT) suppress(rejCriteria, objects);
@@ -823,7 +853,7 @@ struct ConfidenceGtTrace
     }
 };
 // detect local maximum, maintaining the rest of traces
-void DollarNMSTrace(std::vector<cv::softcascade::Trace>& positiveTrace)
+void DollarNMSTrace(std::vector<cv::softcascade::Trace>& positiveTrace, bool noMaxSupp)
 {
 
 	std::vector<cv::softcascade::Trace> objects=positiveTrace;
@@ -850,15 +880,25 @@ void DollarNMSTrace(std::vector<cv::softcascade::Trace>& positiveTrace)
                 ++next;
         }
     }
+    if(noMaxSupp){
+        for (std::vector<cv::softcascade::Trace>::iterator it = positiveTrace.begin(); it != positiveTrace.end();){
+        	if(it->classType!=cv::softcascade::Trace::LOCALMAXIMUM)
+        		it=positiveTrace.erase(it);
+        	else
+        		++it;
+        }
+    }
 }
 
 
+
+
 cv::softcascade::Trace::Trace(const uint64 ind,const uint octave, const uint level, const Detection& dw, const std::vector<float>& scores, const int classification)
- :index(ind),octaveIndex(octave),numLevel(level),detection(dw.bb(),dw.confidence,dw.kind), subscores(scores),classType(classification) {localMaxIndex=-1;}
+ :index(ind),octaveIndex(octave),levelIndex(level),detection(dw.bb(),dw.confidence,dw.kind), subscores(scores),classType(classification) {localMaxIndex=-1;}
 
 
 cv::softcascade::DetectorTrace::DetectorTrace(const double mins, const double maxs, const int nsc, const int rej)
-: Detector(mins,maxs,nsc,rej) {traceType2Return= ALL_TR;}
+: Detector(mins,maxs,nsc,rej) {traceType2Return= LOCALMAXIMUM_TR;}
 
 cv::softcascade::DetectorTrace::~DetectorTrace() {}
 
@@ -906,10 +946,10 @@ void cv::softcascade::DetectorTrace::detectAtTrace(const int dx, const int dy, c
         float impact = fields->leaves[(st * 4) + lShift];
 
         detectionScore += impact;
-        subScores.push_back(impact);
+        subScores.push_back(detectionScore);
 
         if (detectionScore <= weak.threshold){
-        	if(traceType2Return!=POSITIVE_TR){
+        	if(traceType2Return==NEGATIVE_TR ||traceType2Return==NEG_POS_TR){
         		int shrinkage = 4;//(*octave).shrinkage;
         		cv::Rect rect(cvRound(dx * shrinkage), cvRound(dy * shrinkage), level.objSize.width, level.objSize.height);
 
@@ -934,7 +974,7 @@ void cv::softcascade::DetectorTrace::detectAtTrace(const int dx, const int dy, c
 				static_cast<uint64>(positiveTrace.size()),octave.index,levelI,cv::softcascade::Detection(rect, detectionScore),subScores,Trace::POSITIVE));
 
 	}
-	else if(traceType2Return!=POSITIVE_TR)
+	else if(traceType2Return==NEGATIVE_TR ||traceType2Return==NEG_POS_TR)
 		negativeTrace.push_back(cv::softcascade::Trace(
 				static_cast<uint64>(negativeTrace.size()),octave.index,levelI,cv::softcascade::Detection(rect, detectionScore),subScores,Trace::NEGATIVE));
 }
@@ -964,7 +1004,7 @@ void cv::softcascade::DetectorTrace::detectNoRoiTrace(const cv::Mat& image, std:
         }
     }
 
-    if (traceType2Return != NEGATIVE_TR) DollarNMSTrace(positiveTrace);
+    if (traceType2Return != NEGATIVE_TR) DollarNMSTrace(positiveTrace,traceType2Return==LOCALMAXIMUM_TR);
 }
 
 void cv::softcascade::DetectorTrace::detectTrace(InputArray _image, InputArray _rois, std::vector<Trace>& positiveTrace,std::vector<Trace>& negativeTrace, int traceType)
@@ -1022,6 +1062,6 @@ void cv::softcascade::DetectorTrace::detectTrace(InputArray _image, InputArray _
          }
     }
 
-    if (traceType2Return != NEGATIVE_TR) DollarNMSTrace(positiveTrace);
+    if (traceType2Return != NEGATIVE_TR) DollarNMSTrace(positiveTrace,traceType2Return==LOCALMAXIMUM_TR);
 }
 

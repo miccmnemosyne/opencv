@@ -126,8 +126,12 @@ PARAM_TEST_CASE(Lut, MatDepth, MatDepth, bool, bool)
 
     void Near(double threshold = 0.)
     {
-        EXPECT_MAT_NEAR(dst, Mat(gdst_whole), threshold);
-        EXPECT_MAT_NEAR(dst_roi, Mat(gdst_roi), threshold);
+        Mat whole, roi;
+        gdst_whole.download(whole);
+        gdst_roi.download(roi);
+
+        EXPECT_MAT_NEAR(dst, whole, threshold);
+        EXPECT_MAT_NEAR(dst_roi, roi, threshold);
     }
 };
 
@@ -188,13 +192,13 @@ PARAM_TEST_CASE(ArithmTestBase, MatDepth, Channels, bool)
         use_roi = GET_PARAM(2);
     }
 
-    void random_roi()
+    virtual void random_roi()
     {
         const int type = CV_MAKE_TYPE(depth, cn);
 
         Size roiSize = randomSize(1, MAX_VALUE);
-        Border srcBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
-        randomSubMat(src1, src1_roi, roiSize, srcBorder, type, 2, 11);
+        Border src1Border = randomBorder(0, use_roi ? MAX_VALUE : 0);
+        randomSubMat(src1, src1_roi, roiSize, src1Border, type, 2, 11);
 
         Border src2Border = randomBorder(0, use_roi ? MAX_VALUE : 0);
         randomSubMat(src2, src2_roi, roiSize, src2Border, type, -1540, 1740);
@@ -210,7 +214,7 @@ PARAM_TEST_CASE(ArithmTestBase, MatDepth, Channels, bool)
         cv::threshold(mask, mask, 0.5, 255., CV_8UC1);
 
 
-        generateOclMat(gsrc1_whole, gsrc1_roi, src1, roiSize, srcBorder);
+        generateOclMat(gsrc1_whole, gsrc1_roi, src1, roiSize, src1Border);
         generateOclMat(gsrc2_whole, gsrc2_roi, src2, roiSize, src2Border);
         generateOclMat(gdst1_whole, gdst1_roi, dst1, roiSize, dst1Border);
         generateOclMat(gdst2_whole, gdst2_roi, dst2, roiSize, dst2Border);
@@ -222,14 +226,22 @@ PARAM_TEST_CASE(ArithmTestBase, MatDepth, Channels, bool)
 
     void Near(double threshold = 0.)
     {
-        EXPECT_MAT_NEAR(dst1, Mat(gdst1_whole), threshold);
-        EXPECT_MAT_NEAR(dst1_roi, Mat(gdst1_roi), threshold);
+        Mat whole, roi;
+        gdst1_whole.download(whole);
+        gdst1_roi.download(roi);
+
+        EXPECT_MAT_NEAR(dst1, whole, threshold);
+        EXPECT_MAT_NEAR(dst1_roi, roi, threshold);
     }
 
     void Near1(double threshold = 0.)
     {
-        EXPECT_MAT_NEAR(dst2, Mat(gdst2_whole), threshold);
-        EXPECT_MAT_NEAR(dst2_roi, Mat(gdst2_roi), threshold);
+        Mat whole, roi;
+        gdst2_whole.download(whole);
+        gdst2_roi.download(roi);
+
+        EXPECT_MAT_NEAR(dst2, whole, threshold);
+        EXPECT_MAT_NEAR(dst2_roi, roi, threshold);
     }
 };
 
@@ -724,6 +736,15 @@ OCL_TEST_P(MinMax, MAT)
 
 OCL_TEST_P(MinMax, MASK)
 {
+    enum { MAX_IDX = 0, MIN_IDX };
+    static const double minMaxGolds[2][7] =
+    {
+        { std::numeric_limits<uchar>::min(), std::numeric_limits<char>::min(), std::numeric_limits<ushort>::min(),
+          std::numeric_limits<short>::min(), std::numeric_limits<int>::min(), -std::numeric_limits<float>::max(), -std::numeric_limits<double>::max() },
+        { std::numeric_limits<uchar>::max(), std::numeric_limits<char>::max(), std::numeric_limits<ushort>::max(),
+          std::numeric_limits<short>::max(), std::numeric_limits<int>::max(), std::numeric_limits<float>::max(), std::numeric_limits<double>::max() },
+    };
+
     for (int j = 0; j < LOOP_TIMES; j++)
     {
         random_roi();
@@ -750,8 +771,16 @@ OCL_TEST_P(MinMax, MASK)
         double minVal_, maxVal_;
         cv::ocl::minMax(gsrc1_roi, &minVal_, &maxVal_, gmask_roi);
 
-        EXPECT_DOUBLE_EQ(minVal, minVal_);
-        EXPECT_DOUBLE_EQ(maxVal, maxVal_);
+        if (cv::countNonZero(mask_roi) == 0)
+        {
+            EXPECT_DOUBLE_EQ(minMaxGolds[MIN_IDX][depth], minVal_);
+            EXPECT_DOUBLE_EQ(minMaxGolds[MAX_IDX][depth], maxVal_);
+        }
+        else
+        {
+            EXPECT_DOUBLE_EQ(minVal, minVal_);
+            EXPECT_DOUBLE_EQ(maxVal, maxVal_);
+        }
     }
 }
 
@@ -1493,6 +1522,48 @@ OCL_TEST_P(Norm, NORM_L2)
         }
 }
 
+//// Repeat
+
+struct RepeatTestCase :
+        public ArithmTestBase
+{
+    int nx, ny;
+
+    virtual void random_roi()
+    {
+        const int type = CV_MAKE_TYPE(depth, cn);
+
+        nx = randomInt(1, 4);
+        ny = randomInt(1, 4);
+
+        Size srcRoiSize = randomSize(1, MAX_VALUE);
+        Border srcBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
+        randomSubMat(src1, src1_roi, srcRoiSize, srcBorder, type, 2, 11);
+
+        Size dstRoiSize(srcRoiSize.width * nx, srcRoiSize.height * ny);
+        Border dst1Border = randomBorder(0, use_roi ? MAX_VALUE : 0);
+        randomSubMat(dst1, dst1_roi, dstRoiSize, dst1Border, type, 5, 16);
+
+        generateOclMat(gsrc1_whole, gsrc1_roi, src1, srcRoiSize, srcBorder);
+        generateOclMat(gdst1_whole, gdst1_roi, dst1, dstRoiSize, dst1Border);
+    }
+};
+
+typedef RepeatTestCase Repeat;
+
+OCL_TEST_P(Repeat, Mat)
+{
+    for (int i = 0; i < LOOP_TIMES; ++i)
+    {
+        random_roi();
+
+        cv::repeat(src1_roi, ny, nx, dst1_roi);
+        cv::ocl::repeat(gsrc1_roi, ny, nx, gdst1_roi);
+
+        Near();
+    }
+}
+
 //////////////////////////////////////// Instantiation /////////////////////////////////////////
 
 INSTANTIATE_TEST_CASE_P(Arithm, Lut, Combine(Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F, CV_64F), Values(1, 2, 3, 4), Bool(), Bool()));
@@ -1528,5 +1599,6 @@ INSTANTIATE_TEST_CASE_P(Arithm, AddWeighted, Combine(Values(CV_8U, CV_8S, CV_16U
 INSTANTIATE_TEST_CASE_P(Arithm, SetIdentity, Combine(Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F, CV_64F), Values(1, 2, 3, 4), Bool()));
 INSTANTIATE_TEST_CASE_P(Arithm, MeanStdDev, Combine(Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F, CV_64F), Values(1, 2, 3, 4), Bool()));
 INSTANTIATE_TEST_CASE_P(Arithm, Norm, Combine(Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F, CV_64F), Values(1, 2, 3, 4), Bool()));
+INSTANTIATE_TEST_CASE_P(Arithm, Repeat, Combine(Values(CV_8U, CV_8S, CV_16U, CV_16S, CV_32S, CV_32F, CV_64F), Values(1, 2, 3, 4), Bool()));
 
 #endif // HAVE_OPENCL

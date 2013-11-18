@@ -1,4 +1,6 @@
-### OpenCV: Open Source Computer Vision Library
+# Project: Fast Detector
+
+Implementation of the major strategies proposed of State of Art, mantaining compatibility with OpenCv Library ([Itseez/opencv](https://github.com/Itseez/opencv))
 
 #### Resources
 

@@ -605,7 +605,6 @@ void cv::softcascade::Detector::detect(InputArray _image, InputArray _rois,  Out
 // ============================================================================================================= //
 void cv::softcascade::FastDtModel::TraceModel::compute(){
 
-
 	slopes.clear();
 
 	double slopeSum;

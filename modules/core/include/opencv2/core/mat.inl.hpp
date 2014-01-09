@@ -108,6 +108,12 @@ inline _InputArray::_InputArray(const cuda::CudaMem& cuda_mem)
 
 inline _InputArray::~_InputArray() {}
 
+inline bool _InputArray::isMat() const { return kind() == _InputArray::MAT; }
+inline bool _InputArray::isUMat() const  { return kind() == _InputArray::UMAT; }
+inline bool _InputArray::isMatVectot() const { return kind() == _InputArray::STD_VECTOR_MAT; }
+inline bool _InputArray::isUMatVector() const  { return kind() == _InputArray::STD_VECTOR_UMAT; }
+inline bool _InputArray::isMatx()  { return kind() == _InputArray::MATX; }
+
 ////////////////////////////////////////////////////////////////////////////////////////
 
 inline _OutputArray::_OutputArray() { init(ACCESS_WRITE, 0); }
@@ -260,6 +266,12 @@ inline _InputOutputArray::_InputOutputArray(const Mat& m)
 
 inline _InputOutputArray::_InputOutputArray(const std::vector<Mat>& vec)
 { init(FIXED_SIZE + STD_VECTOR_MAT + ACCESS_RW, &vec); }
+
+inline _InputOutputArray::_InputOutputArray(const UMat& m)
+{ init(FIXED_TYPE + FIXED_SIZE + UMAT + ACCESS_RW, &m); }
+
+inline _InputOutputArray::_InputOutputArray(const std::vector<UMat>& vec)
+{ init(FIXED_SIZE + STD_VECTOR_UMAT + ACCESS_RW, &vec); }
 
 inline _InputOutputArray::_InputOutputArray(const cuda::GpuMat& d_mat)
 { init(FIXED_TYPE + FIXED_SIZE + GPU_MAT + ACCESS_RW, &d_mat); }
@@ -611,9 +623,9 @@ inline void Mat::release()
 {
     if( u && CV_XADD(&u->refcount, -1) == 1 )
         deallocate();
+    u = NULL;
     data = datastart = dataend = datalimit = 0;
     size.p[0] = 0;
-    u = 0;
 }
 
 inline
@@ -1525,7 +1537,9 @@ template<typename _Tp> template<int m, int n> inline
 Mat_<_Tp>::operator Matx<typename DataType<_Tp>::channel_type, m, n>() const
 {
     CV_Assert(n % DataType<_Tp>::channels == 0);
-    return this->Mat::operator Matx<typename DataType<_Tp>::channel_type, m, n>();
+
+    Matx<typename DataType<_Tp>::channel_type, m, n> res = this->Mat::operator Matx<typename DataType<_Tp>::channel_type, m, n>();
+    return res;
 }
 
 template<typename _Tp> inline
@@ -3122,14 +3136,6 @@ cols(1), allocator(0), u(0), offset(0), size(&rows)
         Mat((int)vec.size(), 1, DataType<_Tp>::type, (uchar*)&vec[0]).copyTo(*this);
 }
 
-
-inline
-UMat::~UMat()
-{
-    release();
-    if( step.p != step.buf )
-        fastFree(step.p);
-}
 
 inline
 UMat& UMat::operator = (const UMat& m)

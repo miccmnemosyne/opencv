@@ -21,7 +21,7 @@ The word "cascade" in the classifier name means that the resultant classifier co
 The feature used in a particular classifier is specified by its shape (1a, 2b etc.), position within the region of interest and the scale (this scale is not the same as the scale used at the detection stage, though these two scales are multiplied). For example, in the case of the third line feature (2c) the response is calculated as the difference between the sum of image pixels under the rectangle covering the whole feature (including the two white stripes and the black stripe in the middle) and the sum of the image pixels under the black stripe multiplied by 3 in order to compensate for the differences in the size of areas. The sums of pixel values over a rectangular regions are calculated rapidly using integral images (see below and the :ocv:func:`integral` description).
 
 To see the object detector at work, have a look at the facedetect demo:
-http://code.opencv.org/projects/opencv/repository/revisions/master/entry/samples/cpp/dbt_face_detection.cpp
+https://github.com/Itseez/opencv/tree/master/samples/cpp/dbt_face_detection.cpp
 
 The following reference is for the detection part only. There is a separate application called  ``opencv_traincascade`` that can train a cascade of boosted classifiers from a set of samples.
 
@@ -86,11 +86,13 @@ FeatureEvaluator::setImage
 ------------------------------
 Assigns an image to feature evaluator.
 
-.. ocv:function:: bool FeatureEvaluator::setImage(const Mat& img, Size origWinSize)
+.. ocv:function:: bool FeatureEvaluator::setImage(InputArray img, Size origWinSize, Size sumSize)
 
-    :param img: Matrix of the type   ``CV_8UC1``  containing an image where the features are computed.
+    :param img: Matrix of the type ``CV_8UC1`` containing an image where the features are computed.
 
     :param origWinSize: Size of training images.
+
+    :param sumSize: The requested size of integral images (so if the integral image is smaller, it resides in the top-left corner of the larger image of requested size). Because the features are represented using offsets from the image origin, using the same sumSize for all scales helps to avoid constant readjustments of the features to different scales.
 
 The method assigns an image, where the features will be computed, to the feature evaluator.
 
@@ -188,8 +190,8 @@ CascadeClassifier::detectMultiScale
 ---------------------------------------
 Detects objects of different sizes in the input image. The detected objects are returned as a list of rectangles.
 
-.. ocv:function:: void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& objects, double scaleFactor=1.1, int minNeighbors=3, int flags=0, Size minSize=Size(), Size maxSize=Size())
-.. ocv:function:: void CascadeClassifier::detectMultiScale( const Mat& image, vector<Rect>& objects, vector<int>& numDetections, double scaleFactor=1.1, int minNeighbors=3, int flags=0, Size minSize=Size(), Size maxSize=Size())
+.. ocv:function:: void CascadeClassifier::detectMultiScale( InputArray image, vector<Rect>& objects, double scaleFactor=1.1, int minNeighbors=3, int flags=0, Size minSize=Size(), Size maxSize=Size())
+.. ocv:function:: void CascadeClassifier::detectMultiScale( InputArray image, vector<Rect>& objects, vector<int>& numDetections, double scaleFactor=1.1, int minNeighbors=3, int flags=0, Size minSize=Size(), Size maxSize=Size())
 
 .. ocv:pyfunction:: cv2.CascadeClassifier.detectMultiScale(image[, scaleFactor[, minNeighbors[, flags[, minSize[, maxSize]]]]]) -> objects
 .. ocv:pyfunction:: cv2.CascadeClassifier.detectMultiScale(image[, scaleFactor[, minNeighbors[, flags[, minSize[, maxSize[, outputRejectLevels]]]]]]) -> objects, rejectLevels, levelWeights
@@ -220,44 +222,6 @@ The function is parallelized with the TBB library.
 
    * (Python) A face detection example using cascade classifiers can be found at opencv_source_code/samples/python2/facedetect.py
 
-
-CascadeClassifier::setImage
--------------------------------
-Sets an image for detection.
-
-.. ocv:function:: bool CascadeClassifier::setImage( Ptr<FeatureEvaluator>& feval, const Mat& image )
-
-.. ocv:cfunction:: void cvSetImagesForHaarClassifierCascade( CvHaarClassifierCascade* cascade, const CvArr* sum, const CvArr* sqsum, const CvArr* tilted_sum, double scale )
-
-    :param cascade: Haar classifier cascade (OpenCV 1.x API only). See :ocv:func:`CascadeClassifier::detectMultiScale` for more information.
-
-    :param feval: Pointer to the feature evaluator used for computing features.
-
-    :param image: Matrix of the type   ``CV_8UC1``  containing an image where the features are computed.
-
-The function is automatically called by :ocv:func:`CascadeClassifier::detectMultiScale` at every image scale. But if you want to test various locations manually using :ocv:func:`CascadeClassifier::runAt`, you need to call the function before, so that the integral images are computed.
-
-.. note:: in the old API you need to supply integral images (that can be obtained using :ocv:cfunc:`Integral`) instead of the original image.
-
-
-CascadeClassifier::runAt
-----------------------------
-Runs the detector at the specified point.
-
-.. ocv:function:: int CascadeClassifier::runAt( Ptr<FeatureEvaluator>& feval, Point pt, double& weight )
-
-.. ocv:cfunction:: int cvRunHaarClassifierCascade( const CvHaarClassifierCascade* cascade, CvPoint pt, int start_stage=0 )
-
-    :param cascade: Haar classifier cascade (OpenCV 1.x API only). See :ocv:func:`CascadeClassifier::detectMultiScale` for more information.
-
-    :param feval: Feature evaluator used for computing features.
-
-    :param pt: Upper left point of the window where the features are computed. Size of the window is equal to the size of training images.
-
-The function returns 1 if the cascade classifier detects an object in the given location.
-Otherwise, it returns negated index of the stage at which the candidate has been rejected.
-
-Use :ocv:func:`CascadeClassifier::setImage` to set the image for the detector to work with.
 
 groupRectangles
 -------------------

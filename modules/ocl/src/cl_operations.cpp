@@ -192,6 +192,7 @@ void openCLMallocPitchEx(Context *ctx, void **dev_ptr, size_t *pitch,
         clFinish(getClCommandQueue(ctx));
 #endif
         CheckBuffers data(mainBuffer, size, widthInBytes, height);
+        cv::AutoLock lock(getInitializationMutex());
         __check_buffers.insert(std::pair<cl_mem, CheckBuffers>((cl_mem)*dev_ptr, data));
     }
 #endif
@@ -253,10 +254,17 @@ void openCLFree(void *devPtr)
     bool failBefore = false, failAfter = false;
 #endif
     CheckBuffers data;
-    std::map<cl_mem, CheckBuffers>::iterator i = __check_buffers.find((cl_mem)devPtr);
-    if (i != __check_buffers.end())
     {
-        data = i->second;
+        cv::AutoLock lock(getInitializationMutex());
+        std::map<cl_mem, CheckBuffers>::iterator i = __check_buffers.find((cl_mem)devPtr);
+        if (i != __check_buffers.end())
+        {
+            data = i->second;
+            __check_buffers.erase(i);
+        }
+    }
+    if (data.mainBuffer != NULL)
+    {
 #ifdef CHECK_MEMORY_CORRUPTION
         Context* ctx = Context::getContext();
         std::vector<uchar> checkBefore(__memory_corruption_guard_bytes);
@@ -282,11 +290,11 @@ void openCLFree(void *devPtr)
         }
 #else
         // TODO FIXIT Attach clReleaseMemObject call to event completion callback
-        Context* ctx = Context::getContext();
-        clFinish(getClCommandQueue(ctx));
+        // TODO 2013/12/04 Disable workaround
+        // Context* ctx = Context::getContext();
+        // clFinish(getClCommandQueue(ctx));
 #endif
         openCLSafeCall(clReleaseMemObject(data.mainBuffer));
-        __check_buffers.erase(i);
     }
 #if defined(CHECK_MEMORY_CORRUPTION)
     if (failBefore)
@@ -379,7 +387,7 @@ cl_kernel openCLGetKernelFromSource(Context *ctx, const cv::ocl::ProgramEntry* s
         idxStr << "_C" << channels;
     if(depth != -1)
         idxStr << "_D" << depth;
-    kernelName = kernelName + idxStr.str();
+    kernelName += idxStr.str();
 
     std::string fixedOptions = removeDuplicatedWhiteSpaces(build_options);
     cl_kernel kernel = openCLGetKernelFromSource(ctx, source, kernelName, fixedOptions.c_str());
@@ -459,28 +467,28 @@ void openCLExecuteKernel(Context *ctx, const cv::ocl::ProgramEntry* source, Stri
     openCLExecuteKernel_(ctx, source, kernelName, globalThreads, localThreads, args, channels, depth,
                          build_options);
 #else
-    string data_type[] = { "uchar", "char", "ushort", "short", "int", "float", "double"};
-    cout << endl;
-    cout << "Function Name: " << kernelName;
+    String data_type[] = { "uchar", "char", "ushort", "short", "int", "float", "double"};
+    std::cout << std::endl;
+    std::cout << "Function Name: " << kernelName;
     if(depth >= 0)
-        cout << " |data type: " << data_type[depth];
-    cout << " |channels: " << channels;
-    cout << " |Time Unit: " << "ms" << endl;
+        std::cout << " |data type: " << data_type[depth];
+    std::cout << " |channels: " << channels;
+    std::cout << " |Time Unit: " << "ms" << std::endl;
 
     total_execute_time = 0;
     total_kernel_time = 0;
-    cout << "-------------------------------------" << endl;
+    std::cout << "-------------------------------------" << std::endl;
 
-    cout << setiosflags(ios::left) << setw(15) << "execute time";
-    cout << setiosflags(ios::left) << setw(15) << "launch time";
-    cout << setiosflags(ios::left) << setw(15) << "kernel time" << endl;
+    std::cout << std::setiosflags(std::ios::left) << std::setw(15) << "execute time";
+    std::cout << std::setiosflags(std::ios::left) << std::setw(15) << "launch time";
+    std::cout << std::setiosflags(std::ios::left) << std::setw(15) << "kernel time" << std::endl;
     int i = 0;
     for(i = 0; i < RUN_TIMES; i++)
         openCLExecuteKernel_(ctx, source, kernelName, globalThreads, localThreads, args, channels, depth,
                              build_options);
 
-    cout << "average kernel execute time: " << total_execute_time / RUN_TIMES << endl; // "ms" << endl;
-    cout << "average kernel total time:  " << total_kernel_time / RUN_TIMES << endl; // "ms" << endl;
+    std::cout << "average kernel execute time: " << total_execute_time / RUN_TIMES << std::endl; // "ms" << std::endl;
+    std::cout << "average kernel total time:  " << total_kernel_time / RUN_TIMES << std::endl; // "ms" << std::endl;
 #endif
 }
 
@@ -497,7 +505,7 @@ void openCLExecuteKernelInterop(Context *ctx, const cv::ocl::ProgramSource& sour
         idxStr << "_C" << channels;
     if(depth != -1)
         idxStr << "_D" << depth;
-    kernelName = kernelName + idxStr.str();
+    kernelName += idxStr.str();
 
     std::string name = std::string("custom_") + source.name;
     ProgramEntry program = { name.c_str(), source.programStr, source.programHash };

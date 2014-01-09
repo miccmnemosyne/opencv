@@ -43,16 +43,13 @@
 
 #include <string>
 #include <iostream>
-#include <fstream>
-#include <iterator>
-#include <limits>
-#include <numeric>
 #include "opencv2/core/ocl.hpp"
 
 using namespace cv;
 using namespace std;
 
-class CV_UMatTest : public cvtest::BaseTest
+class CV_UMatTest :
+        public cvtest::BaseTest
 {
 public:
     CV_UMatTest() {}
@@ -91,11 +88,11 @@ bool CV_UMatTest::TestUMat()
 {
     try
     {
-        Mat a(100, 100, CV_16S), b;
+        Mat a(100, 100, CV_16SC2), b, c;
         randu(a, Scalar::all(-100), Scalar::all(100));
-        Rect roi(1, 3, 10, 20);
-        Mat ra(a, roi), rb;
-        UMat ua, ura;
+        Rect roi(1, 3, 5, 4);
+        Mat ra(a, roi), rb, rc, rc0;
+        UMat ua, ura, ub, urb, uc, urc;
         a.copyTo(ua);
         ua.copyTo(b);
         CHECK_DIFF(a, b);
@@ -107,11 +104,76 @@ bool CV_UMatTest::TestUMat()
 
         ra += Scalar::all(1.f);
         {
-        Mat temp = ura.getMat(ACCESS_RW);
-        temp += Scalar::all(1.f);
+            Mat temp = ura.getMat(ACCESS_RW);
+            temp += Scalar::all(1.f);
         }
         ra.copyTo(rb);
         CHECK_DIFF(ra, rb);
+
+        b = a.clone();
+        ra = a(roi);
+        rb = b(roi);
+        randu(b, Scalar::all(-100), Scalar::all(100));
+        b.copyTo(ub);
+        urb = ub(roi);
+
+        /*std::cout << "==============================================\nbefore op (CPU):\n";
+        std::cout << "ra: " << ra << std::endl;
+        std::cout << "rb: " << rb << std::endl;*/
+
+        ra.copyTo(ura);
+        rb.copyTo(urb);
+        ra.release();
+        rb.release();
+        ura.copyTo(ra);
+        urb.copyTo(rb);
+
+        /*std::cout << "==============================================\nbefore op (GPU):\n";
+        std::cout << "ra: " << ra << std::endl;
+        std::cout << "rb: " << rb << std::endl;*/
+
+        cv::max(ra, rb, rc);
+        cv::max(ura, urb, urc);
+        urc.copyTo(rc0);
+
+        /*std::cout << "==============================================\nafter op:\n";
+        std::cout << "rc: " << rc << std::endl;
+        std::cout << "rc0: " << rc0 << std::endl;*/
+
+        CHECK_DIFF(rc0, rc);
+
+        {
+            UMat tmp = rc0.getUMat(ACCESS_WRITE);
+            cv::max(ura, urb, tmp);
+        }
+        CHECK_DIFF(rc0, rc);
+
+        ura.copyTo(urc);
+        cv::max(urc, urb, urc);
+        urc.copyTo(rc0);
+        CHECK_DIFF(rc0, rc);
+
+        rc = ra ^ rb;
+        cv::bitwise_xor(ura, urb, urc);
+        urc.copyTo(rc0);
+
+        /*std::cout << "==============================================\nafter op:\n";
+        std::cout << "ra: " << rc0 << std::endl;
+        std::cout << "rc: " << rc << std::endl;*/
+
+        CHECK_DIFF(rc0, rc);
+
+        rc = ra + rb;
+        cv::add(ura, urb, urc);
+        urc.copyTo(rc0);
+
+        CHECK_DIFF(rc0, rc);
+
+        cv::subtract(ra, Scalar::all(5), rc);
+        cv::subtract(ura, Scalar::all(5), urc);
+        urc.copyTo(rc0);
+
+        CHECK_DIFF(rc0, rc);
     }
     catch (const test_excep& e)
     {
@@ -135,3 +197,54 @@ void CV_UMatTest::run( int /* start_from */)
 }
 
 TEST(Core_UMat, base) { CV_UMatTest test; test.safe_run(); }
+
+TEST(Core_UMat, getUMat)
+{
+    {
+        int a[3] = { 1, 2, 3 };
+        Mat m = Mat(1, 1, CV_32SC3, a);
+        UMat u = m.getUMat(ACCESS_READ);
+        EXPECT_NE((void*)NULL, u.u);
+    }
+
+    {
+        Mat m(10, 10, CV_8UC1), ref;
+        for (int y = 0; y < m.rows; ++y)
+        {
+            uchar * const ptr = m.ptr<uchar>(y);
+            for (int x = 0; x < m.cols; ++x)
+                ptr[x] = (uchar)(x + y * 2);
+        }
+
+        ref = m.clone();
+        Rect r(1, 1, 8, 8);
+        ref(r).setTo(17);
+
+        {
+            UMat um = m(r).getUMat(ACCESS_WRITE);
+            um.setTo(17);
+        }
+
+        double err = norm(m, ref, NORM_INF);
+        if (err > 0)
+        {
+            std::cout << "m: " << std::endl << m << std::endl;
+            std::cout << "ref: " << std::endl << ref << std::endl;
+        }
+        EXPECT_EQ(0., err);
+    }
+}
+
+TEST(UMat, Sync)
+{
+    UMat um(10, 10, CV_8UC1);
+
+    {
+        Mat m = um.getMat(ACCESS_WRITE);
+        m.setTo(cv::Scalar::all(17));
+    }
+
+    um.setTo(cv::Scalar::all(19));
+
+    EXPECT_EQ(0, cv::norm(um.getMat(ACCESS_READ), cv::Mat(um.size(), um.type(), 19), NORM_INF));
+}

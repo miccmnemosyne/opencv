@@ -305,6 +305,153 @@ Converts matrices obtained via :ocv:func:`ocl::BruteForceMatcher_OCL_base::radiu
 
 If ``compactResult`` is ``true`` , the ``matches`` vector does not contain matches for fully masked-out query descriptors.
 
+
+ocl::FAST_OCL
+------------------
+.. ocv:class:: ocl::FAST_OCL
+
+Class used for corner detection using the FAST algorithm. ::
+
+        class CV_EXPORTS FAST_OCL
+        {
+        public:
+            enum
+            {
+                X_ROW = 0,
+                Y_ROW,
+                RESPONSE_ROW,
+                ROWS_COUNT
+            };
+
+            // all features have same size
+            static const int FEATURE_SIZE = 7;
+
+            explicit FAST_OCL(int threshold, bool nonmaxSupression = true, double keypointsRatio = 0.05);
+
+            //! finds the keypoints using FAST detector
+            //! supports only CV_8UC1 images
+            void operator ()(const oclMat& image, const oclMat& mask, oclMat& keypoints);
+            void operator ()(const oclMat& image, const oclMat& mask, std::vector<KeyPoint>& keypoints);
+
+            //! download keypoints from device to host memory
+            static void downloadKeypoints(const oclMat& d_keypoints, std::vector<KeyPoint>& keypoints);
+
+            //! convert keypoints to KeyPoint vector
+            static void convertKeypoints(const Mat& h_keypoints, std::vector<KeyPoint>& keypoints);
+
+            //! release temporary buffer's memory
+            void release();
+
+            bool nonmaxSupression;
+
+            int threshold;
+
+            //! max keypoints = keypointsRatio * img.size().area()
+            double keypointsRatio;
+
+            //! find keypoints and compute it's response if nonmaxSupression is true
+            //! return count of detected keypoints
+            int calcKeyPointsLocation(const oclMat& image, const oclMat& mask);
+
+            //! get final array of keypoints
+            //! performs nonmax supression if needed
+            //! return final count of keypoints
+            int getKeyPoints(oclMat& keypoints);
+
+        private:
+            // Hidden
+        };
+
+
+The class ``FAST_OCL`` implements FAST corner detection algorithm.
+
+.. seealso:: :ocv:func:`FAST`
+
+
+
+ocl::FAST_OCL::FAST_OCL
+--------------------------
+Constructor.
+
+.. ocv:function:: ocl::FAST_OCL::FAST_OCL(int threshold, bool nonmaxSupression = true, double keypointsRatio = 0.05)
+
+    :param threshold: Threshold on difference between intensity of the central pixel and pixels on a circle around this pixel.
+
+    :param nonmaxSupression: If it is true, non-maximum suppression is applied to detected corners (keypoints).
+
+    :param keypointsRatio: Inner buffer size for keypoints store is determined as (keypointsRatio * image_width * image_height).
+
+
+
+ocl::FAST_OCL::operator ()
+----------------------------
+Finds the keypoints using FAST detector.
+
+.. ocv:function:: void ocl::FAST_OCL::operator ()(const oclMat& image, const oclMat& mask, oclMat& keypoints)
+.. ocv:function:: void ocl::FAST_OCL::operator ()(const oclMat& image, const oclMat& mask, std::vector<KeyPoint>& keypoints)
+
+    :param image: Image where keypoints (corners) are detected. Only 8-bit grayscale images are supported.
+
+    :param mask: Optional input mask that marks the regions where we should detect features.
+
+    :param keypoints: The output vector of keypoints. Can be stored both in host or device memory. For device memory:
+
+            * X_ROW of keypoints will contain the horizontal coordinate of the i'th point
+            * Y_ROW of keypoints will contain the vertical coordinate of the i'th point
+            * RESPONSE_ROW will contain response of i'th point (if non-maximum suppression is applied)
+
+
+
+ocl::FAST_OCL::downloadKeypoints
+----------------------------------
+Download keypoints from device to host memory.
+
+.. ocv:function:: void ocl::FAST_OCL::downloadKeypoints(const oclMat& d_keypoints, std::vector<KeyPoint>& keypoints)
+
+
+
+ocl::FAST_OCL::convertKeypoints
+---------------------------------
+Converts keypoints from OpenCL representation to vector of ``KeyPoint``.
+
+.. ocv:function:: void ocl::FAST_OCL::convertKeypoints(const Mat& h_keypoints, std::vector<KeyPoint>& keypoints)
+
+
+
+ocl::FAST_OCL::release
+------------------------
+Releases inner buffer memory.
+
+.. ocv:function:: void ocl::FAST_OCL::release()
+
+
+
+ocl::FAST_OCL::calcKeyPointsLocation
+--------------------------------------
+Find keypoints. If ``nonmaxSupression`` is true, responses are computed and eliminates keypoints with the smaller responses from 9-neighborhood regions.
+
+.. ocv:function:: int ocl::FAST_OCL::calcKeyPointsLocation(const oclMat& image, const oclMat& mask)
+
+    :param image: Image where keypoints (corners) are detected. Only 8-bit grayscale images are supported.
+
+    :param mask: Optional input mask that marks the regions where we should detect features.
+
+The function returns the amount of detected keypoints.
+
+
+
+ocl::FAST_OCL::getKeyPoints
+-----------------------------
+Gets final array of keypoints.
+
+.. ocv:function:: int ocl::FAST_OCL::getKeyPoints(oclMat& keypoints)
+
+    :param keypoints: The output vector of keypoints.
+
+The function performs non-max suppression if needed and returns the final amount of keypoints.
+
+
+
 ocl::HOGDescriptor
 ----------------------
 
@@ -500,3 +647,138 @@ Returns block descriptors computed for the whole image.
         * **DESCR_FORMAT_COL_BY_COL** - Column-major order.
 
 The function is mainly used to learn the classifier.
+
+
+
+ocl::ORB_OCL
+--------------
+.. ocv:class:: ocl::ORB_OCL
+
+Class for extracting ORB features and descriptors from an image. ::
+
+    class ORB_OCL
+    {
+    public:
+        enum
+        {
+            X_ROW = 0,
+            Y_ROW,
+            RESPONSE_ROW,
+            ANGLE_ROW,
+            OCTAVE_ROW,
+            SIZE_ROW,
+            ROWS_COUNT
+        };
+
+        enum
+        {
+            DEFAULT_FAST_THRESHOLD = 20
+        };
+
+        explicit ORB_OCL(int nFeatures = 500, float scaleFactor = 1.2f,
+                         int nLevels = 8, int edgeThreshold = 31,
+                         int firstLevel = 0, int WTA_K = 2,
+                         int scoreType = 0, int patchSize = 31);
+
+        void operator()(const oclMat& image, const oclMat& mask,
+                        std::vector<KeyPoint>& keypoints);
+        void operator()(const oclMat& image, const oclMat& mask, oclMat& keypoints);
+
+        void operator()(const oclMat& image, const oclMat& mask,
+                        std::vector<KeyPoint>& keypoints, oclMat& descriptors);
+        void operator()(const oclMat& image, const oclMat& mask,
+                        oclMat& keypoints, oclMat& descriptors);
+
+        void downloadKeyPoints(oclMat& d_keypoints, std::vector<KeyPoint>& keypoints);
+
+        void convertKeyPoints(Mat& d_keypoints, std::vector<KeyPoint>& keypoints);
+
+        int descriptorSize() const;
+        int descriptorType() const;
+        int defaultNorm() const;
+
+        void setFastParams(int threshold, bool nonmaxSupression = true);
+
+        void release();
+
+        bool blurForDescriptor;
+    };
+
+The class implements ORB feature detection and description algorithm.
+
+
+
+ocl::ORB_OCL::ORB_OCL
+------------------------
+Constructor.
+
+.. ocv:function:: ocl::ORB_OCL::ORB_OCL(int nFeatures = 500, float scaleFactor = 1.2f, int nLevels = 8, int edgeThreshold = 31, int firstLevel = 0, int WTA_K = 2, int scoreType = 0, int patchSize = 31)
+
+    :param nfeatures: The maximum number of features to retain.
+
+    :param scaleFactor: Pyramid decimation ratio, greater than 1. ``scaleFactor==2`` means the classical pyramid, where each next level has 4x less pixels than the previous, but such a big scale factor will degrade feature matching scores dramatically. On the other hand, too close to 1 scale factor will mean that to cover certain scale range you will need more pyramid levels and so the speed will suffer.
+
+    :param nlevels: The number of pyramid levels. The smallest level will have linear size equal to ``input_image_linear_size/pow(scaleFactor, nlevels)``.
+
+    :param edgeThreshold: This is size of the border where the features are not detected. It should roughly match the ``patchSize`` parameter.
+
+    :param firstLevel: It should be 0 in the current implementation.
+
+    :param WTA_K: The number of points that produce each element of the oriented BRIEF descriptor. The default value 2 means the BRIEF where we take a random point pair and compare their brightnesses, so we get 0/1 response. Other possible values are 3 and 4. For example, 3 means that we take 3 random points (of course, those point coordinates are random, but they are generated from the pre-defined seed, so each element of BRIEF descriptor is computed deterministically from the pixel rectangle), find point of maximum brightness and output index of the winner (0, 1 or 2). Such output will occupy 2 bits, and therefore it will need a special variant of Hamming distance, denoted as ``NORM_HAMMING2`` (2 bits per bin).  When ``WTA_K=4``, we take 4 random points to compute each bin (that will also occupy 2 bits with possible values 0, 1, 2 or 3).
+
+    :param scoreType: The default HARRIS_SCORE means that Harris algorithm is used to rank features (the score is written to ``KeyPoint::score`` and is used to retain best ``nfeatures`` features); FAST_SCORE is alternative value of the parameter that produces slightly less stable keypoints, but it is a little faster to compute.
+
+    :param patchSize: size of the patch used by the oriented BRIEF descriptor. Of course, on smaller pyramid layers the perceived image area covered by a feature will be larger.
+
+
+
+ocl::ORB_OCL::operator()
+--------------------------
+Detects keypoints and computes descriptors for them.
+
+.. ocv:function:: void ocl::ORB_OCL::operator()(const oclMat& image, const oclMat& mask, std::vector<KeyPoint>& keypoints)
+
+.. ocv:function:: void ocl::ORB_OCL::operator()(const oclMat& image, const oclMat& mask, oclMat& keypoints)
+
+.. ocv:function:: void ocl::ORB_OCL::operator()(const oclMat& image, const oclMat& mask, std::vector<KeyPoint>& keypoints, oclMat& descriptors)
+
+.. ocv:function:: void ocl::ORB_OCL::operator()(const oclMat& image, const oclMat& mask, oclMat& keypoints, oclMat& descriptors)
+
+    :param image: Input 8-bit grayscale image.
+
+    :param mask: Optional input mask that marks the regions where we should detect features.
+
+    :param keypoints: The input/output vector of keypoints. Can be stored both in host and device memory. For device memory:
+
+            * ``X_ROW`` contains the horizontal coordinate of the i'th feature.
+            * ``Y_ROW`` contains the vertical coordinate of the i'th feature.
+            * ``RESPONSE_ROW`` contains the response of the i'th feature.
+            * ``ANGLE_ROW`` contains the orientation of the i'th feature.
+            * ``RESPONSE_ROW`` contains the octave of the i'th feature.
+            * ``ANGLE_ROW`` contains the size of the i'th feature.
+
+    :param descriptors: Computed descriptors. if ``blurForDescriptor`` is true, image will be blurred before descriptors calculation.
+
+
+
+ocl::ORB_OCL::downloadKeyPoints
+---------------------------------
+Download keypoints from device to host memory.
+
+.. ocv:function:: static void ocl::ORB_OCL::downloadKeyPoints( const oclMat& d_keypoints, std::vector<KeyPoint>& keypoints )
+
+
+
+ocl::ORB_OCL::convertKeyPoints
+--------------------------------
+Converts keypoints from OCL representation to vector of ``KeyPoint``.
+
+.. ocv:function:: static void ocl::ORB_OCL::convertKeyPoints( const Mat& d_keypoints, std::vector<KeyPoint>& keypoints )
+
+
+
+ocl::ORB_OCL::release
+-----------------------
+Releases inner buffer memory.
+
+.. ocv:function:: void ocl::ORB_OCL::release()

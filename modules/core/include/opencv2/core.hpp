@@ -347,6 +347,10 @@ CV_EXPORTS_W void max(InputArray src1, InputArray src2, OutputArray dst);
 CV_EXPORTS void min(const Mat& src1, const Mat& src2, Mat& dst);
 //! computes per-element maximum of two arrays (dst = max(src1, src2))
 CV_EXPORTS void max(const Mat& src1, const Mat& src2, Mat& dst);
+//! computes per-element minimum of two arrays (dst = min(src1, src2))
+CV_EXPORTS void min(const UMat& src1, const UMat& src2, UMat& dst);
+//! computes per-element maximum of two arrays (dst = max(src1, src2))
+CV_EXPORTS void max(const UMat& src1, const UMat& src2, UMat& dst);
 
 //! computes square root of each matrix element (dst = src**0.5)
 CV_EXPORTS_W void sqrt(InputArray src, OutputArray dst);
@@ -1257,6 +1261,5 @@ template<> struct ParamType<uchar>
 
 #include "opencv2/core/operations.hpp"
 #include "opencv2/core/cvstd.inl.hpp"
-
 
 #endif /*__OPENCV_CORE_HPP__*/

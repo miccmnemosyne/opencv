@@ -1,4 +1,6 @@
-### OpenCV: Open Source Computer Vision Library
+# Project: Fast Detector
+
+Implementation of the major strategies proposed of State of Art, mantaining compatibility with OpenCv Library ([Itseez/opencv](https://github.com/Itseez/opencv))
 
 #### Resources
 
@@ -18,6 +20,3 @@ Summary of guidelines:
 * Include tests and documentation;
 * Clean up "oops" commits before submitting;
 * Follow the coding style guide.
-
-[![Donate OpenCV project](http://opencv.org/wp-content/uploads/2013/07/gittip1.png)](https://www.gittip.com/OpenCV/)
-[![Donate OpenCV project](http://opencv.org/wp-content/uploads/2013/07/paypal-donate-button.png)](https://www.paypal.com/cgi-bin/webscr?item_name=Donation+to+OpenCV&cmd=_donations&business=accountant%40opencv.org)

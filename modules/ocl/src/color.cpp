@@ -56,8 +56,19 @@ static void fromRGB_caller(const oclMat &src, oclMat &dst, int bidx, const std::
 {
     int src_offset = src.offset / src.elemSize1(), src_step = src.step1();
     int dst_offset = dst.offset / dst.elemSize1(), dst_step = dst.step1();
+    int pixels_per_work_item = 1;
 
-    std::string build_options = format("-D DEPTH_%d", src.depth());
+    if (Context::getContext()->supportsFeature(FEATURE_CL_INTEL_DEVICE))
+    {
+        if ((src.cols % 4 == 0) && (src.depth() == CV_8U))
+            pixels_per_work_item =  4;
+        else if (src.cols % 2 == 0)
+            pixels_per_work_item =  2;
+        else
+            pixels_per_work_item =  1;
+    }
+
+    std::string build_options = format("-D DEPTH_%d -D scn=%d -D bidx=%d -D pixels_per_work_item=%d", src.depth(), src.oclchannels(), bidx, pixels_per_work_item);
     if (!additionalOptions.empty())
         build_options += additionalOptions;
 
@@ -66,7 +77,6 @@ static void fromRGB_caller(const oclMat &src, oclMat &dst, int bidx, const std::
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
-    args.push_back( make_pair( sizeof(cl_int) , (void *)&bidx));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
@@ -77,14 +87,54 @@ static void fromRGB_caller(const oclMat &src, oclMat &dst, int bidx, const std::
     if (!data2.empty())
         args.push_back( make_pair( sizeof(cl_mem) , (void *)&data2.data ));
 
-    size_t gt[3] = { dst.cols, dst.rows, 1 }, lt[3] = { 16, 16, 1 };
+    size_t gt[3] = { dst.cols/pixels_per_work_item, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
     openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
 }
 
-static void toRGB_caller(const oclMat &src, oclMat &dst, int bidx, const std::string & kernelName,
+static void toHSV_caller(const oclMat &src, oclMat &dst, int bidx, const std::string & kernelName,
+                           const std::string & additionalOptions = std::string(),
+                           const oclMat & data1 = oclMat(), const oclMat & data2 = oclMat())
+{
+    int src_offset = src.offset / src.elemSize1(), src_step = src.step1();
+    int dst_offset = dst.offset / dst.elemSize1(), dst_step = dst.step1();
+
+    std::string build_options = format("-D DEPTH_%d -D scn=%d -D bidx=%d", src.depth(), src.oclchannels(), bidx);
+    if (!additionalOptions.empty())
+        build_options += additionalOptions;
+
+    vector<pair<size_t , const void *> > args;
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.cols));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_offset ));
+
+    if (!data1.empty())
+        args.push_back( make_pair( sizeof(cl_mem) , (void *)&data1.data ));
+    if (!data2.empty())
+        args.push_back( make_pair( sizeof(cl_mem) , (void *)&data2.data ));
+
+   size_t gt[3] = { dst.cols, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
+    openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
+}
+
+static void fromGray_caller(const oclMat &src, oclMat &dst, int bidx, const std::string & kernelName,
                          const std::string & additionalOptions = std::string(), const oclMat & data = oclMat())
 {
-    std::string build_options = format("-D DEPTH_%d -D dcn=%d", src.depth(), dst.channels());
+    std::string build_options = format("-D DEPTH_%d -D dcn=%d -D bidx=%d", src.depth(), dst.channels(), bidx);
     if (!additionalOptions.empty())
         build_options += additionalOptions;
 
@@ -96,7 +146,6 @@ static void toRGB_caller(const oclMat &src, oclMat &dst, int bidx, const std::st
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
-    args.push_back( make_pair( sizeof(cl_int) , (void *)&bidx));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
@@ -105,14 +154,65 @@ static void toRGB_caller(const oclMat &src, oclMat &dst, int bidx, const std::st
     if (!data.empty())
         args.push_back( make_pair( sizeof(cl_mem) , (void *)&data.data ));
 
-    size_t gt[3] = { dst.cols, dst.rows, 1 }, lt[3] = { 16, 16, 1 };
+    size_t gt[3] = { dst.cols, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
     openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
 }
 
-static void RGB_caller(const oclMat &src, oclMat &dst, bool reverse)
+static void toRGB_caller(const oclMat &src, oclMat &dst, int bidx, const std::string & kernelName,
+                         const std::string & additionalOptions = std::string(), const oclMat & data = oclMat())
 {
-    std::string build_options = format("-D DEPTH_%d -D dcn=%d -D scn=%d -D %s", src.depth(),
-                                       dst.channels(), src.channels(), reverse ? "REVERSE" : "ORDER");
+    int src_offset = src.offset / src.elemSize1(), src_step = src.step1();
+    int dst_offset = dst.offset / dst.elemSize1(), dst_step = dst.step1();
+    int pixels_per_work_item = 1;
+
+    if (Context::getContext()->supportsFeature(FEATURE_CL_INTEL_DEVICE))
+    {
+        if ((src.cols % 4 == 0) && (src.depth() == CV_8U))
+            pixels_per_work_item =  4;
+        else if (src.cols % 2 == 0)
+            pixels_per_work_item =  2;
+        else
+            pixels_per_work_item =  1;
+    }
+
+    std::string build_options = format("-D DEPTH_%d -D dcn=%d -D bidx=%d -D pixels_per_work_item=%d", src.depth(), dst.channels(), bidx, pixels_per_work_item);
+    if (!additionalOptions.empty())
+        build_options += additionalOptions;
+
+    vector<pair<size_t , const void *> > args;
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.cols));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_offset ));
+
+    if (!data.empty())
+        args.push_back( make_pair( sizeof(cl_mem) , (void *)&data.data ));
+
+    size_t gt[3] = { dst.cols/pixels_per_work_item, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
+    openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
+}
+
+static void toRGB_NV12_caller(const oclMat &src, oclMat &dst, int bidx, const std::string & kernelName,
+                         const std::string & additionalOptions = std::string(), const oclMat & data = oclMat())
+{
+    std::string build_options = format("-D DEPTH_%d -D dcn=%d -D bidx=%d", src.depth(), dst.channels(), bidx);
+    if (!additionalOptions.empty())
+        build_options += additionalOptions;
+
     int src_offset = src.offset / src.elemSize1(), src_step = src.step1();
     int dst_offset = dst.offset / dst.elemSize1(), dst_step = dst.step1();
 
@@ -126,14 +226,81 @@ static void RGB_caller(const oclMat &src, oclMat &dst, bool reverse)
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_offset ));
 
-    size_t gt[3] = { dst.cols, dst.rows, 1 }, lt[3] = { 16, 16, 1 };
+    if (!data.empty())
+        args.push_back( make_pair( sizeof(cl_mem) , (void *)&data.data ));
+
+    size_t gt[3] = {src.cols, src.rows, 1};
+#ifdef ANDROID
+    size_t lt[3] = {16, 10, 1};
+#else
+    size_t lt[3] = {16, 16, 1};
+#endif
+    openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
+}
+
+static void fromHSV_caller(const oclMat &src, oclMat &dst, int bidx, const std::string & kernelName,
+                         const std::string & additionalOptions = std::string(), const oclMat & data = oclMat())
+{
+    std::string build_options = format("-D DEPTH_%d -D dcn=%d -D bidx=%d", src.depth(), dst.channels(), bidx);
+    if (!additionalOptions.empty())
+        build_options += additionalOptions;
+
+    int src_offset = src.offset / src.elemSize1(), src_step = src.step1();
+    int dst_offset = dst.offset / dst.elemSize1(), dst_step = dst.step1();
+
+    vector<pair<size_t , const void *> > args;
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.cols));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_offset ));
+
+    if (!data.empty())
+        args.push_back( make_pair( sizeof(cl_mem) , (void *)&data.data ));
+
+    size_t gt[3] = { dst.cols, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
+    openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
+}
+
+static void RGB_caller(const oclMat &src, oclMat &dst, bool reverse)
+{
+    int src_offset = src.offset / src.elemSize1(), src_step = src.step1();
+    int dst_offset = dst.offset / dst.elemSize1(), dst_step = dst.step1();
+
+    std::string build_options = format("-D DEPTH_%d -D dcn=%d -D scn=%d -D %s",
+                                        src.depth(), dst.channels(), src.channels(), reverse ? "REVERSE" : "ORDER");
+
+    vector<pair<size_t , const void *> > args;
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.cols));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
+    args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
+    args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_offset ));
+
+    size_t gt[3] = { dst.cols, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
     openCLExecuteKernel(src.clCxt, &cvt_color, "RGB", gt, lt, args, -1, -1, build_options.c_str());
 }
 
 static void fromRGB5x5_caller(const oclMat &src, oclMat &dst, int bidx, int greenbits, const std::string & kernelName)
 {
-    std::string build_options = format("-D DEPTH_%d -D greenbits=%d -D dcn=%d",
-                                       src.depth(), greenbits, dst.channels());
+    std::string build_options = format("-D DEPTH_%d -D greenbits=%d -D dcn=%d -D bidx=%d",
+                                       src.depth(), greenbits, dst.channels(), bidx);
     int src_offset = src.offset >> 1, src_step = src.step >> 1;
     int dst_offset = dst.offset / dst.elemSize1(), dst_step = dst.step / dst.elemSize1();
 
@@ -142,20 +309,24 @@ static void fromRGB5x5_caller(const oclMat &src, oclMat &dst, int bidx, int gree
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
-    args.push_back( make_pair( sizeof(cl_int) , (void *)&bidx));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_offset ));
 
-    size_t gt[3] = { dst.cols, dst.rows, 1 }, lt[3] = { 16, 16, 1 };
+    size_t gt[3] = { dst.cols, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
     openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
 }
 
 static void toRGB5x5_caller(const oclMat &src, oclMat &dst, int bidx, int greenbits, const std::string & kernelName)
 {
-    std::string build_options = format("-D DEPTH_%d -D greenbits=%d -D scn=%d",
-                                       src.depth(), greenbits, src.channels());
+    std::string build_options = format("-D DEPTH_%d -D greenbits=%d -D scn=%d -D bidx=%d",
+                                       src.depth(), greenbits, src.channels(), bidx);
     int src_offset = (int)src.offset, src_step = (int)src.step;
     int dst_offset = dst.offset >> 1, dst_step = dst.step >> 1;
 
@@ -164,13 +335,17 @@ static void toRGB5x5_caller(const oclMat &src, oclMat &dst, int bidx, int greenb
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst.rows));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_step));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_step));
-    args.push_back( make_pair( sizeof(cl_int) , (void *)&bidx));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&src.data));
     args.push_back( make_pair( sizeof(cl_mem) , (void *)&dst.data));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&src_offset ));
     args.push_back( make_pair( sizeof(cl_int) , (void *)&dst_offset ));
 
-    size_t gt[3] = { dst.cols, dst.rows, 1 }, lt[3] = { 16, 16, 1 };
+    size_t gt[3] = { dst.cols, dst.rows, 1 };
+#ifdef ANDROID
+    size_t lt[3] = { 16, 10, 1 };
+#else
+    size_t lt[3] = { 16, 16, 1 };
+#endif
     openCLExecuteKernel(src.clCxt, &cvt_color, kernelName.c_str(), gt, lt, args, -1, -1, build_options.c_str());
 }
 
@@ -247,7 +422,7 @@ static void cvtColor_caller(const oclMat &src, oclMat &dst, int code, int dcn)
         CV_Assert(scn == 1);
         dcn  = code == CV_GRAY2BGRA ? 4 : 3;
         dst.create(sz, CV_MAKETYPE(depth, dcn));
-        toRGB_caller(src, dst, 0, "Gray2RGB");
+        fromGray_caller(src, dst, 0, "Gray2RGB");
         break;
     }
     case CV_BGR2YUV: case CV_RGB2YUV:
@@ -278,7 +453,7 @@ static void cvtColor_caller(const oclMat &src, oclMat &dst, int code, int dcn)
 
         Size dstSz(sz.width, sz.height * 2 / 3);
         dst.create(dstSz, CV_MAKETYPE(depth, dcn));
-        toRGB_caller(src, dst, bidx, "YUV2RGBA_NV12");
+        toRGB_NV12_caller(src, dst, bidx, "YUV2RGBA_NV12");
         break;
     }
     case CV_BGR2YCrCb: case CV_RGB2YCrCb:
@@ -435,11 +610,11 @@ static void cvtColor_caller(const oclMat &src, oclMat &dst, int code, int dcn)
                 initialized = true;
             }
 
-            fromRGB_caller(src, dst, bidx, kernelName, format(" -D hrange=%d", hrange), sdiv_data, hrange == 256 ? hdiv_data256 : hdiv_data180);
+            toHSV_caller(src, dst, bidx, kernelName, format(" -D hrange=%d", hrange), sdiv_data, hrange == 256 ? hdiv_data256 : hdiv_data180);
             return;
         }
 
-        fromRGB_caller(src, dst, bidx, kernelName, format(" -D hscale=%f", hrange*(1.f/360.f)));
+        toHSV_caller(src, dst, bidx, kernelName, format(" -D hscale=%f", hrange*(1.f/360.f)));
         break;
     }
     case CV_HSV2BGR: case CV_HSV2RGB: case CV_HSV2BGR_FULL: case CV_HSV2RGB_FULL:
@@ -458,7 +633,7 @@ static void cvtColor_caller(const oclMat &src, oclMat &dst, int code, int dcn)
         dst.create(sz, CV_MAKETYPE(depth, dcn));
 
         std::string kernelName = std::string(is_hsv ? "HSV" : "HLS") + "2RGB";
-        toRGB_caller(src, dst, bidx, kernelName, format(" -D hrange=%d -D hscale=%f", hrange, 6.f/hrange));
+        fromHSV_caller(src, dst, bidx, kernelName, format(" -D hrange=%d -D hscale=%f", hrange, 6.f/hrange));
         break;
     }
     case CV_RGBA2mRGBA: case CV_mRGBA2RGBA:

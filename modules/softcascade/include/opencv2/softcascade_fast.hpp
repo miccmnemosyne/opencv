@@ -145,7 +145,7 @@ struct CV_EXPORTS Trace{
 	// Param dw				is detection window
 	// Param subScores		is detector result (positive detection window)
 	// Param classification is detector result (positive detection window)
-	Trace(const uint64 ind,const uint octave, const uint level, const Detection& dw, const std::vector<float>& scores, const int classification);
+	Trace(const uint64 ind,const uint octave, const uint level, const Detection& dw, const std::vector<float>& scores, const std::vector<float>& stagesResp, const int classification);
 
 	enum{NEGATIVE=0,POSITIVE,LOCALMAXIMUM};
 	uint64 	index;
@@ -154,6 +154,7 @@ struct CV_EXPORTS Trace{
 	uint 	levelIndex;
 	Detection detection;
 	std::vector<float> subscores;
+	std::vector<float> stages;
 	int classType;
 };
 

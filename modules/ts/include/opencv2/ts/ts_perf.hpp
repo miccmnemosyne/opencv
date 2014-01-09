@@ -237,6 +237,7 @@ typedef struct CV_EXPORTS performance_metrics
         TERM_TIME = 1,
         TERM_INTERRUPT = 2,
         TERM_EXCEPTION = 3,
+        TERM_SKIP_TEST = 4, // there are some limitations and test should be skipped
         TERM_UNKNOWN = -1
     };
 
@@ -250,6 +251,7 @@ typedef struct CV_EXPORTS performance_metrics
 \*****************************************************************************************/
 enum PERF_STRATEGY
 {
+    PERF_STRATEGY_DEFAULT = -1,
     PERF_STRATEGY_BASE = 0,
     PERF_STRATEGY_SIMPLE = 1,
 };
@@ -270,8 +272,10 @@ public:
     static std::string getDataPath(const std::string& relativePath);
     static std::string getSelectedImpl();
 
-    static enum PERF_STRATEGY getPerformanceStrategy();
-    static enum PERF_STRATEGY setPerformanceStrategy(enum PERF_STRATEGY strategy);
+    static enum PERF_STRATEGY getCurrentModulePerformanceStrategy();
+    static enum PERF_STRATEGY setModulePerformanceStrategy(enum PERF_STRATEGY strategy);
+
+    class PerfSkipTestException: public cv::Exception {};
 
 protected:
     virtual void PerfTestBody() = 0;
@@ -283,9 +287,9 @@ protected:
     void stopTimer();
     bool next();
 
-    //_declareHelper declare;
+    PERF_STRATEGY getCurrentPerformanceStrategy() const;
 
-    enum
+    enum WarmUpType
     {
         WARMUP_READ,
         WARMUP_WRITE,
@@ -294,9 +298,10 @@ protected:
     };
 
     void reportMetrics(bool toJUnitXML = false);
-    static void warmup(cv::InputOutputArray a, int wtype = WARMUP_READ);
+    static void warmup(cv::InputOutputArray a, WarmUpType wtype = WARMUP_READ);
 
     performance_metrics& calcMetrics();
+
     void RunPerfTestBody();
 private:
     typedef std::vector<std::pair<int, cv::Size> > SizeVector;
@@ -306,6 +311,8 @@ private:
     SizeVector outputData;
     unsigned int getTotalInputSize() const;
     unsigned int getTotalOutputSize() const;
+
+    enum PERF_STRATEGY testStrategy;
 
     TimeVector times;
     int64 lastTime;
@@ -324,28 +331,30 @@ private:
     static int64 _timeadjustment;
     static int64 _calibrate();
 
-    static void warmup_impl(cv::Mat m, int wtype);
+    static void warmup_impl(cv::Mat m, WarmUpType wtype);
     static int getSizeInBytes(cv::InputArray a);
     static cv::Size getSize(cv::InputArray a);
-    static void declareArray(SizeVector& sizes, cv::InputOutputArray a, int wtype = 0);
+    static void declareArray(SizeVector& sizes, cv::InputOutputArray a, WarmUpType wtype);
 
     class CV_EXPORTS _declareHelper
     {
     public:
-        _declareHelper& in(cv::InputOutputArray a1, int wtype = WARMUP_READ);
-        _declareHelper& in(cv::InputOutputArray a1, cv::InputOutputArray a2, int wtype = WARMUP_READ);
-        _declareHelper& in(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, int wtype = WARMUP_READ);
-        _declareHelper& in(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, cv::InputOutputArray a4, int wtype = WARMUP_READ);
+        _declareHelper& in(cv::InputOutputArray a1, WarmUpType wtype = WARMUP_READ);
+        _declareHelper& in(cv::InputOutputArray a1, cv::InputOutputArray a2, WarmUpType wtype = WARMUP_READ);
+        _declareHelper& in(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, WarmUpType wtype = WARMUP_READ);
+        _declareHelper& in(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, cv::InputOutputArray a4, WarmUpType wtype = WARMUP_READ);
 
-        _declareHelper& out(cv::InputOutputArray a1, int wtype = WARMUP_WRITE);
-        _declareHelper& out(cv::InputOutputArray a1, cv::InputOutputArray a2, int wtype = WARMUP_WRITE);
-        _declareHelper& out(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, int wtype = WARMUP_WRITE);
-        _declareHelper& out(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, cv::InputOutputArray a4, int wtype = WARMUP_WRITE);
+        _declareHelper& out(cv::InputOutputArray a1, WarmUpType wtype = WARMUP_WRITE);
+        _declareHelper& out(cv::InputOutputArray a1, cv::InputOutputArray a2, WarmUpType wtype = WARMUP_WRITE);
+        _declareHelper& out(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, WarmUpType wtype = WARMUP_WRITE);
+        _declareHelper& out(cv::InputOutputArray a1, cv::InputOutputArray a2, cv::InputOutputArray a3, cv::InputOutputArray a4, WarmUpType wtype = WARMUP_WRITE);
 
         _declareHelper& iterations(unsigned int n);
         _declareHelper& time(double timeLimitSecs);
         _declareHelper& tbb_threads(int n = -1);
         _declareHelper& runs(unsigned int runsNumber);
+
+        _declareHelper& strategy(enum PERF_STRATEGY s);
     private:
         TestBase* test;
         _declareHelper(TestBase* t);

@@ -46,7 +46,7 @@
 #ifndef __OPENCV_OPENCL_SAFE_CALL_HPP__
 #define __OPENCV_OPENCL_SAFE_CALL_HPP__
 
-#include "opencv2/ocl/cl_runtime/cl_runtime.hpp"
+#include "opencv2/core/opencl/runtime/opencl_core.hpp"
 
 #define openCLSafeCall(expr)  ___openCLSafeCall(expr, __FILE__, __LINE__, CV_Func)
 #define openCLVerifyCall(res) ___openCLSafeCall(res, __FILE__, __LINE__, CV_Func)

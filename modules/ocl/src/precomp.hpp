@@ -58,18 +58,6 @@
 
 #include "cvconfig.h"
 
-#if defined(BUILD_SHARED_LIBS)
-#if defined WIN32 || defined _WIN32 || defined WINCE
-#define CL_RUNTIME_EXPORT __declspec(dllexport)
-#elif defined __GNUC__ && __GNUC__ >= 4
-#define CL_RUNTIME_EXPORT __attribute__ ((visibility ("default")))
-#else
-#define CL_RUNTIME_EXPORT
-#endif
-#else
-#define CL_RUNTIME_EXPORT
-#endif
-
 #include <map>
 #include <iostream>
 #include <limits>
@@ -84,9 +72,11 @@
 #include "opencv2/imgproc.hpp"
 #include "opencv2/objdetect/objdetect_c.h"
 #include "opencv2/ocl.hpp"
+#include "opencv2/features2d.hpp"
 
 #include "opencv2/core/utility.hpp"
 #include "opencv2/core/private.hpp"
+#include "opencv2/core/ocl.hpp"
 
 #define __ATI__
 

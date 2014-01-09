@@ -48,6 +48,7 @@
 #include <functional>
 #include <iterator>
 #include <vector>
+#include <algorithm>
 #include "opencl_kernels.hpp"
 
 using namespace cv;
@@ -675,7 +676,7 @@ void cv::ocl::BruteForceMatcher_OCL_base::matchCollection(const oclMat &query, c
     ensureSizeIsEnough(1, nQuery, CV_32S, imgIdx);
     ensureSizeIsEnough(1, nQuery, CV_32F, distance);
 
-    matchDispatcher(query, (const oclMat *)trainCollection.ptr(), trainCollection.cols, masks, trainIdx, imgIdx, distance, distType);
+    matchDispatcher(query, &trainCollection, trainCollection.cols, masks, trainIdx, imgIdx, distance, distType);
 
     return;
 }
@@ -967,14 +968,14 @@ void cv::ocl::BruteForceMatcher_OCL_base::knnMatch(const oclMat &query, std::vec
                 std::vector<DMatch> &localMatch = curMatches[queryIdx];
                 std::vector<DMatch> &globalMatch = matches[queryIdx];
 
-                for_each(localMatch.begin(), localMatch.end(), ImgIdxSetter(static_cast<int>(imgIdx)));
+                std::for_each(localMatch.begin(), localMatch.end(), ImgIdxSetter(static_cast<int>(imgIdx)));
 
                 temp.clear();
-                merge(globalMatch.begin(), globalMatch.end(), localMatch.begin(), localMatch.end(), back_inserter(temp));
+                std::merge(globalMatch.begin(), globalMatch.end(), localMatch.begin(), localMatch.end(), back_inserter(temp));
 
                 globalMatch.clear();
                 const size_t count = std::min((size_t)k, temp.size());
-                copy(temp.begin(), temp.begin() + count, back_inserter(globalMatch));
+                std::copy(temp.begin(), temp.begin() + count, back_inserter(globalMatch));
             }
         }
 
@@ -1072,7 +1073,7 @@ void cv::ocl::BruteForceMatcher_OCL_base::radiusMatchConvert(const Mat &trainIdx
             curMatches[i] = m;
         }
 
-        sort(curMatches.begin(), curMatches.end());
+        std::sort(curMatches.begin(), curMatches.end());
     }
 }
 
@@ -1199,7 +1200,7 @@ void cv::ocl::BruteForceMatcher_OCL_base::radiusMatchConvert(const Mat &trainIdx
             curMatches.push_back(m);
         }
 
-        sort(curMatches.begin(), curMatches.end());
+        std::sort(curMatches.begin(), curMatches.end());
     }
 }
 

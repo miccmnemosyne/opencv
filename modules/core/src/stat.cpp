@@ -41,6 +41,7 @@
 //M*/
 
 #include "precomp.hpp"
+#include "opencl_kernels.hpp"
 #include <climits>
 #include <limits>
 
@@ -448,10 +449,77 @@ static SumSqrFunc getSumSqrTab(int depth)
     return sumSqrTab[depth];
 }
 
+template <typename T> Scalar ocl_part_sum(Mat m)
+{
+    CV_Assert(m.rows == 1);
+
+    Scalar s = Scalar::all(0);
+    int cn = m.channels();
+    const T * const ptr = m.ptr<T>(0);
+
+    for (int x = 0, w = m.cols * cn; x < w; )
+        for (int c = 0; c < cn; ++c, ++x)
+            s[c] += ptr[x];
+
+    return s;
+}
+
+enum { OCL_OP_SUM = 0, OCL_OP_SUM_ABS =  1, OCL_OP_SUM_SQR = 2 };
+
+static bool ocl_sum( InputArray _src, Scalar & res, int sum_op )
+{
+    CV_Assert(sum_op == OCL_OP_SUM || sum_op == OCL_OP_SUM_ABS || sum_op == OCL_OP_SUM_SQR);
+
+    int type = _src.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type);
+    bool doubleSupport = ocl::Device::getDefault().doubleFPConfig() > 0;
+
+    if ( (!doubleSupport && depth == CV_64F) || cn > 4 || cn == 3 || _src.dims() > 2 )
+        return false;
+
+    int dbsize = ocl::Device::getDefault().maxComputeUnits();
+    size_t wgs = ocl::Device::getDefault().maxWorkGroupSize();
+
+    int ddepth = std::max(CV_32S, depth), dtype = CV_MAKE_TYPE(ddepth, cn);
+
+    int wgs2_aligned = 1;
+    while (wgs2_aligned < (int)wgs)
+        wgs2_aligned <<= 1;
+    wgs2_aligned >>= 1;
+
+    static const char * const opMap[3] = { "OP_SUM", "OP_SUM_ABS", "OP_SUM_SQR" };
+    char cvt[40];
+    ocl::Kernel k("reduce", ocl::core::reduce_oclsrc,
+                  format("-D srcT=%s -D dstT=%s -D convertToDT=%s -D %s -D WGS=%d -D WGS2_ALIGNED=%d%s",
+                         ocl::typeToStr(type), ocl::typeToStr(dtype), ocl::convertTypeStr(depth, ddepth, cn, cvt),
+                         opMap[sum_op], (int)wgs, wgs2_aligned,
+                         doubleSupport ? " -D DOUBLE_SUPPORT" : ""));
+    if (k.empty())
+        return false;
+
+    UMat src = _src.getUMat(), db(1, dbsize, dtype);
+    k.args(ocl::KernelArg::ReadOnlyNoSize(src), src.cols, (int)src.total(),
+           dbsize, ocl::KernelArg::PtrWriteOnly(db));
+
+    size_t globalsize = dbsize * wgs;
+    if (k.run(1, &globalsize, &wgs, true))
+    {
+        typedef Scalar (*part_sum)(Mat m);
+        part_sum funcs[3] = { ocl_part_sum<int>, ocl_part_sum<float>, ocl_part_sum<double> },
+                func = funcs[ddepth - CV_32S];
+        res = func(db.getMat(ACCESS_READ));
+        return true;
+    }
+    return false;
+}
+
 }
 
 cv::Scalar cv::sum( InputArray _src )
 {
+    Scalar _res;
+    if (ocl::useOpenCL() && _src.isUMat() && ocl_sum(_src, _res, OCL_OP_SUM))
+        return _res;
+
     Mat src = _src.getMat();
     int k, cn = src.channels(), depth = src.depth();
 
@@ -542,12 +610,55 @@ cv::Scalar cv::sum( InputArray _src )
     return s;
 }
 
+namespace cv {
+
+static bool ocl_countNonZero( InputArray _src, int & res )
+{
+    int type = _src.type(), depth = CV_MAT_DEPTH(type);
+    bool doubleSupport = ocl::Device::getDefault().doubleFPConfig() > 0;
+
+    if (depth == CV_64F && !doubleSupport)
+        return false;
+
+    int dbsize = ocl::Device::getDefault().maxComputeUnits();
+    size_t wgs = ocl::Device::getDefault().maxWorkGroupSize();
+
+    int wgs2_aligned = 1;
+    while (wgs2_aligned < (int)wgs)
+        wgs2_aligned <<= 1;
+    wgs2_aligned >>= 1;
+
+    ocl::Kernel k("reduce", ocl::core::reduce_oclsrc,
+                  format("-D srcT=%s -D OP_COUNT_NON_ZERO -D WGS=%d -D WGS2_ALIGNED=%d%s",
+                         ocl::typeToStr(type), (int)wgs,
+                         wgs2_aligned, doubleSupport ? " -D DOUBLE_SUPPORT" : ""));
+    if (k.empty())
+        return false;
+
+    UMat src = _src.getUMat(), db(1, dbsize, CV_32SC1);
+    k.args(ocl::KernelArg::ReadOnlyNoSize(src), src.cols, (int)src.total(),
+           dbsize, ocl::KernelArg::PtrWriteOnly(db));
+
+    size_t globalsize = dbsize * wgs;
+    if (k.run(1, &globalsize, &wgs, true))
+        return res = saturate_cast<int>(cv::sum(db.getMat(ACCESS_READ))[0]), true;
+    return false;
+}
+
+}
+
 int cv::countNonZero( InputArray _src )
 {
+    CV_Assert( _src.channels() == 1 );
+
+    int res = -1;
+    if (ocl::useOpenCL() && _src.isUMat() && ocl_countNonZero(_src, res))
+        return res;
+
     Mat src = _src.getMat();
     CountNonZeroFunc func = getCountNonZeroTab(src.depth());
 
-    CV_Assert( src.channels() == 1 && func != 0 );
+    CV_Assert( func != 0 );
 
     const Mat* arrays[] = {&src, 0};
     uchar* ptrs[1];
@@ -693,9 +804,54 @@ cv::Scalar cv::mean( InputArray _src, InputArray _mask )
     return s*(nz0 ? 1./nz0 : 0);
 }
 
+namespace cv {
+
+static bool ocl_meanStdDev( InputArray _src, OutputArray _mean, OutputArray _sdv )
+{
+    Scalar mean, stddev;
+    if (!ocl_sum(_src, mean, OCL_OP_SUM))
+        return false;
+    if (!ocl_sum(_src, stddev, OCL_OP_SUM_SQR))
+        return false;
+
+    double total = 1.0 / _src.total();
+    int k, j, cn = _src.channels();
+    for (int i = 0; i < cn; ++i)
+    {
+        mean[i] *= total;
+        stddev[i] = std::sqrt(std::max(stddev[i] * total - mean[i] * mean[i] , 0.));
+    }
+
+    for( j = 0; j < 2; j++ )
+    {
+        const double * const sptr = j == 0 ? &mean[0] : &stddev[0];
+        _OutputArray _dst = j == 0 ? _mean : _sdv;
+        if( !_dst.needed() )
+            continue;
+
+        if( !_dst.fixedSize() )
+            _dst.create(cn, 1, CV_64F, -1, true);
+        Mat dst = _dst.getMat();
+        int dcn = (int)dst.total();
+        CV_Assert( dst.type() == CV_64F && dst.isContinuous() &&
+                   (dst.cols == 1 || dst.rows == 1) && dcn >= cn );
+        double* dptr = dst.ptr<double>();
+        for( k = 0; k < cn; k++ )
+            dptr[k] = sptr[k];
+        for( ; k < dcn; k++ )
+            dptr[k] = 0;
+    }
+
+    return true;
+}
+
+}
 
 void cv::meanStdDev( InputArray _src, OutputArray _mean, OutputArray _sdv, InputArray _mask )
 {
+    if (ocl::useOpenCL() && _src.isUMat() && _mask.empty() && ocl_meanStdDev(_src, _mean, _sdv))
+        return;
+
     Mat src = _src.getMat(), mask = _mask.getMat();
     CV_Assert( mask.empty() || mask.type() == CV_8U );
 
@@ -1003,15 +1159,136 @@ static void ofs2idx(const Mat& a, size_t ofs, int* idx)
 
 }
 
+namespace cv
+{
+
+template <typename T>
+void getMinMaxRes(const Mat &minv, const Mat &maxv, const Mat &minl, const Mat &maxl, double* minVal,
+                  double* maxVal, int* minLoc, int* maxLoc, const int groupnum, const int cn, const int cols)
+{
+    T min = std::numeric_limits<T>::max();
+    T max = std::numeric_limits<T>::min() > 0 ? -std::numeric_limits<T>::max() : std::numeric_limits<T>::min();
+    int minloc = INT_MAX, maxloc = INT_MAX;
+    for( int i = 0; i < groupnum; i++)
+    {
+        T current_min = minv.at<T>(0,i);
+        T current_max = maxv.at<T>(0,i);
+        T oldmin = min, oldmax = max;
+        min = std::min(min, current_min);
+        max = std::max(max, current_max);
+        if (cn == 1)
+        {
+            int current_minloc = minl.at<int>(0,i);
+            int current_maxloc = maxl.at<int>(0,i);
+            if(current_minloc < 0 || current_maxloc < 0) continue;
+            minloc = (oldmin == current_min) ? std::min(minloc, current_minloc) : (oldmin < current_min) ? minloc : current_minloc;
+            maxloc = (oldmax == current_max) ? std::min(maxloc, current_maxloc) : (oldmax > current_max) ? maxloc : current_maxloc;
+        }
+    }
+    bool zero_mask = (maxloc == INT_MAX) || (minloc == INT_MAX);
+    if(minVal)
+        *minVal = zero_mask ? 0 : (double)min;
+    if(maxVal)
+        *maxVal = zero_mask ? 0 : (double)max;
+    if(minLoc)
+    {
+        minLoc[0] = zero_mask ? -1 : minloc/cols;
+        minLoc[1] = zero_mask ? -1 : minloc%cols;
+    }
+    if(maxLoc)
+    {
+        maxLoc[0] = zero_mask ? -1 : maxloc/cols;
+        maxLoc[1] = zero_mask ? -1 : maxloc%cols;
+    }
+}
+
+typedef void (*getMinMaxResFunc)(const Mat &minv, const Mat &maxv, const Mat &minl, const Mat &maxl, double *minVal,
+                                 double *maxVal, int *minLoc, int *maxLoc, const int gropunum, const int cn, const int cols);
+
+static bool ocl_minMaxIdx( InputArray _src, double* minVal, double* maxVal, int* minLoc, int* maxLoc, InputArray _mask)
+{
+    CV_Assert( (_src.channels() == 1 && (_mask.empty() || _mask.type() == CV_8U)) ||
+        (_src.channels() >= 1 && _mask.empty() && !minLoc && !maxLoc) );
+
+    int type = _src.type(), depth = CV_MAT_DEPTH(type);
+    bool doubleSupport = ocl::Device::getDefault().doubleFPConfig() > 0;
+
+    if (depth == CV_64F && !doubleSupport)
+        return false;
+
+    int groupnum = ocl::Device::getDefault().maxComputeUnits();
+    size_t wgs = ocl::Device::getDefault().maxWorkGroupSize();
+
+    int wgs2_aligned = 1;
+    while (wgs2_aligned < (int)wgs)
+        wgs2_aligned <<= 1;
+    wgs2_aligned >>= 1;
+
+    String opts = format("-D DEPTH_%d -D OP_MIN_MAX_LOC%s -D WGS=%d -D WGS2_ALIGNED=%d %s",
+        depth, _mask.empty() ? "" : "_MASK", (int)wgs, wgs2_aligned, doubleSupport ? "-D DOUBLE_SUPPORT" : "");
+
+    ocl::Kernel k("reduce", ocl::core::reduce_oclsrc, opts);
+    if (k.empty())
+        return false;
+
+    UMat src = _src.getUMat(), minval(1, groupnum, src.type()),
+        maxval(1, groupnum, src.type()), minloc( 1, groupnum, CV_32SC1),
+        maxloc( 1, groupnum, CV_32SC1), mask;
+    if(!_mask.empty())
+        mask = _mask.getUMat();
+
+    if(src.channels()>1)
+        src = src.reshape(1);
+
+    if(mask.empty())
+        k.args(ocl::KernelArg::ReadOnlyNoSize(src), src.cols, (int)src.total(),
+            groupnum, ocl::KernelArg::PtrWriteOnly(minval), ocl::KernelArg::PtrWriteOnly(maxval),
+            ocl::KernelArg::PtrWriteOnly(minloc), ocl::KernelArg::PtrWriteOnly(maxloc));
+    else
+        k.args(ocl::KernelArg::ReadOnlyNoSize(src), src.cols, (int)src.total(), groupnum,
+            ocl::KernelArg::PtrWriteOnly(minval), ocl::KernelArg::PtrWriteOnly(maxval),
+            ocl::KernelArg::PtrWriteOnly(minloc), ocl::KernelArg::PtrWriteOnly(maxloc), ocl::KernelArg::ReadOnlyNoSize(mask));
+
+    size_t globalsize = groupnum * wgs;
+    if (!k.run(1, &globalsize, &wgs, true))
+        return false;
+
+    Mat minv = minval.getMat(ACCESS_READ), maxv = maxval.getMat(ACCESS_READ),
+        minl = minloc.getMat(ACCESS_READ), maxl = maxloc.getMat(ACCESS_READ);
+
+    static getMinMaxResFunc functab[7] =
+    {
+        getMinMaxRes<uchar>,
+        getMinMaxRes<char>,
+        getMinMaxRes<ushort>,
+        getMinMaxRes<short>,
+        getMinMaxRes<int>,
+        getMinMaxRes<float>,
+        getMinMaxRes<double>
+    };
+
+    getMinMaxResFunc func;
+
+    func = functab[depth];
+    func(minv, maxv, minl, maxl, minVal, maxVal, minLoc, maxLoc, groupnum, src.channels(), src.cols);
+
+    return true;
+}
+}
+
 void cv::minMaxIdx(InputArray _src, double* minVal,
                    double* maxVal, int* minIdx, int* maxIdx,
                    InputArray _mask)
 {
+    CV_Assert( (_src.channels() == 1 && (_mask.empty() || _mask.type() == CV_8U)) ||
+        (_src.channels() >= 1 && _mask.empty() && !minIdx && !maxIdx) );
+
+     if( ocl::useOpenCL() && _src.isUMat() && _src.dims() <= 2  && ( _mask.empty() || _src.size() == _mask.size() )
+         && ocl_minMaxIdx(_src, minVal, maxVal, minIdx, maxIdx, _mask) )
+        return;
+
     Mat src = _src.getMat(), mask = _mask.getMat();
     int depth = src.depth(), cn = src.channels();
-
-    CV_Assert( (cn == 1 && (mask.empty() || mask.type() == CV_8U)) ||
-               (cn >= 1 && mask.empty() && !minIdx && !maxIdx) );
 
 #if defined (HAVE_IPP) && (IPP_VERSION_MAJOR >= 7)
     size_t total_size = src.total();
@@ -1133,8 +1410,7 @@ void cv::minMaxIdx(InputArray _src, double* minVal,
 void cv::minMaxLoc( InputArray _img, double* minVal, double* maxVal,
                     Point* minLoc, Point* maxLoc, InputArray mask )
 {
-    Mat img = _img.getMat();
-    CV_Assert(img.dims <= 2);
+    CV_Assert(_img.dims() <= 2);
 
     minMaxIdx(_img, minVal, maxVal, (int*)minLoc, (int*)maxLoc, mask);
     if( minLoc )
@@ -1604,15 +1880,76 @@ static NormDiffFunc getNormDiffFunc(int normType, int depth)
 
 }
 
+namespace cv {
+
+static bool ocl_norm( InputArray _src, int normType, double & result )
+{
+    int type = _src.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type);
+    bool doubleSupport = ocl::Device::getDefault().doubleFPConfig() > 0;
+
+    if ( !(normType == NORM_INF || normType == NORM_L1 || normType == NORM_L2) ||
+         (!doubleSupport && depth == CV_64F))
+        return false;
+
+    UMat src = _src.getUMat();
+
+    if (normType == NORM_INF)
+    {
+        UMat abssrc;
+
+        if (depth != CV_8U && depth != CV_16U)
+        {
+            int wdepth = std::max(CV_32S, depth);
+            char cvt[50];
+
+            ocl::Kernel kabs("KF", ocl::core::arithm_oclsrc,
+                             format("-D UNARY_OP -D OP_ABS_NOSAT -D dstT=%s -D srcT1=%s -D convertToDT=%s%s",
+                                    ocl::typeToStr(wdepth), ocl::typeToStr(depth),
+                                    ocl::convertTypeStr(depth, wdepth, 1, cvt),
+                                    doubleSupport ? " -D DOUBLE_SUPPORT" : ""));
+            if (kabs.empty())
+                return false;
+
+            abssrc.create(src.size(), CV_MAKE_TYPE(wdepth, cn));
+            kabs.args(ocl::KernelArg::ReadOnlyNoSize(src), ocl::KernelArg::WriteOnly(abssrc, cn));
+
+            size_t globalsize[2] = { src.cols * cn, src.rows };
+            if (!kabs.run(2, globalsize, NULL, false))
+                return false;
+        }
+        else
+            abssrc = src;
+
+        cv::minMaxIdx(abssrc.reshape(1), NULL, &result);
+    }
+    else if (normType == NORM_L1 || normType == NORM_L2)
+    {
+        Scalar s;
+        bool unstype = depth == CV_8U || depth == CV_16U;
+
+        ocl_sum(src.reshape(1), s, normType == NORM_L2 ?
+                    OCL_OP_SUM_SQR : (unstype ? OCL_OP_SUM : OCL_OP_SUM_ABS) );
+        result = normType == NORM_L1 ? s[0] : std::sqrt(s[0]);
+    }
+
+    return true;
+}
+
+}
+
 double cv::norm( InputArray _src, int normType, InputArray _mask )
 {
-    Mat src = _src.getMat(), mask = _mask.getMat();
-    int depth = src.depth(), cn = src.channels();
-
-    normType &= 7;
+    normType &= NORM_TYPE_MASK;
     CV_Assert( normType == NORM_INF || normType == NORM_L1 ||
                normType == NORM_L2 || normType == NORM_L2SQR ||
-               ((normType == NORM_HAMMING || normType == NORM_HAMMING2) && src.type() == CV_8U) );
+               ((normType == NORM_HAMMING || normType == NORM_HAMMING2) && _src.type() == CV_8U) );
+
+    double _result = 0;
+    if (ocl::useOpenCL() && _mask.empty() && _src.isUMat() && _src.dims() <= 2 && ocl_norm(_src, normType, _result))
+        return _result;
+
+    Mat src = _src.getMat(), mask = _mask.getMat();
+    int depth = src.depth(), cn = src.channels();
 
 #if defined (HAVE_IPP) && (IPP_VERSION_MAJOR >= 7)
     size_t total_size = src.total();
@@ -1891,9 +2228,56 @@ double cv::norm( InputArray _src, int normType, InputArray _mask )
     return result.d;
 }
 
+namespace cv {
+
+static bool ocl_norm( InputArray _src1, InputArray _src2, int normType, double & result )
+{
+    int type = _src1.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type);
+    bool doubleSupport = ocl::Device::getDefault().doubleFPConfig() > 0;
+    bool relative = (normType & NORM_RELATIVE) != 0;
+    normType &= ~NORM_RELATIVE;
+
+    if ( !(normType == NORM_INF || normType == NORM_L1 || normType == NORM_L2) ||
+         (!doubleSupport && depth == CV_64F))
+        return false;
+
+    int wdepth = std::max(CV_32S, depth);
+    char cvt[50];
+    ocl::Kernel k("KF", ocl::core::arithm_oclsrc,
+                  format("-D BINARY_OP -D OP_ABSDIFF -D dstT=%s -D workT=dstT -D srcT1=%s -D srcT2=srcT1"
+                         " -D convertToDT=%s -D convertToWT1=convertToDT -D convertToWT2=convertToDT%s",
+                         ocl::typeToStr(wdepth), ocl::typeToStr(depth),
+                         ocl::convertTypeStr(depth, wdepth, 1, cvt),
+                         doubleSupport ? " -D DOUBLE_SUPPORT" : ""));
+    if (k.empty())
+        return false;
+
+    UMat src1 = _src1.getUMat(), src2 = _src2.getUMat(), diff(src1.size(), CV_MAKE_TYPE(wdepth, cn));
+    k.args(ocl::KernelArg::ReadOnlyNoSize(src1), ocl::KernelArg::ReadOnlyNoSize(src2),
+           ocl::KernelArg::WriteOnly(diff, cn));
+
+    size_t globalsize[2] = { diff.cols * cn, diff.rows };
+    if (!k.run(2, globalsize, NULL, false))
+        return false;
+
+    result = cv::norm(diff, normType);
+    if (relative)
+        result /= cv::norm(src2, normType) + DBL_EPSILON;
+
+    return true;
+}
+
+}
 
 double cv::norm( InputArray _src1, InputArray _src2, int normType, InputArray _mask )
 {
+    CV_Assert( _src1.size() == _src2.size() && _src1.type() == _src2.type() );
+
+    double _result = 0;
+    if (ocl::useOpenCL() && _mask.empty() && _src1.isUMat() && _src2.isUMat() &&
+            _src1.dims() <= 2 && _src2.dims() <= 2 && ocl_norm(_src1, _src2, normType, _result))
+        return _result;
+
     if( normType & CV_RELATIVE )
     {
 #if defined (HAVE_IPP) && (IPP_VERSION_MAJOR >= 7)
@@ -1979,7 +2363,7 @@ double cv::norm( InputArray _src1, InputArray _src2, int normType, InputArray _m
     Mat src1 = _src1.getMat(), src2 = _src2.getMat(), mask = _mask.getMat();
     int depth = src1.depth(), cn = src1.channels();
 
-    CV_Assert( src1.size == src2.size && src1.type() == src2.type() );
+    CV_Assert( src1.size == src2.size );
 
     normType &= 7;
     CV_Assert( normType == NORM_INF || normType == NORM_L1 ||
@@ -2602,9 +2986,8 @@ void cv::findNonZero( InputArray _src, OutputArray _idx )
 
 double cv::PSNR(InputArray _src1, InputArray _src2)
 {
-    Mat src1 = _src1.getMat(), src2 = _src2.getMat();
-    CV_Assert( src1.depth() == CV_8U );
-    double diff = std::sqrt(norm(src1, src2, NORM_L2SQR)/(src1.total()*src1.channels()));
+    CV_Assert( _src1.depth() == CV_8U );
+    double diff = std::sqrt(norm(_src1, _src2, NORM_L2SQR)/(_src1.total()*_src1.channels()));
     return 20*log10(255./(diff+DBL_EPSILON));
 }
 

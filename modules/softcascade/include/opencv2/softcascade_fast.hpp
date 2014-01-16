@@ -10,11 +10,19 @@
 
 #include "softcascade.hpp"
 #include <map>
-
+#include <list>
+#include <numeric>
 
 struct Level;
 struct ChannelStorage;
 
+#define DEBUG_MSG
+
+#ifdef DEBUG_MSG
+#define DEBUG_MSG(str) do { std::cout << "<<debug>>" << str << std::endl; } while( false )
+#else
+#define DEBUG_MSG(str) do { } while ( false )
+#endif
 
 namespace cv { namespace softcascade {
 
@@ -22,29 +30,64 @@ namespace cv { namespace softcascade {
 // ============================================================================================================== //
 //					     Declaration of DetectorFast (with trace evaluation reduction)
 // ============================================================================================================= //
+struct CV_EXPORTS ParamDetectorFast
+{
+	ParamDetectorFast();
+	ParamDetectorFast(double minScale, double maxScale, uint nScale, int nMS, uint lastStage, uint gridSize);
+
+	// pyramid settings
+	double	minScale;
+	double	maxScale;
+	uint 	nScales;
+
+	// No Maximum Soppression
+	int 	nMS;
+
+	// Linear Cascade Approximation parameter
+	uint 	lastStage;
+
+	// Geometric moedl: grid size
+	uint 	gridSize;
+
+};
+
 
 struct CV_EXPORTS FastDtModel
 {
-	FastDtModel(uint numLevels);
+	FastDtModel(ParamDetectorFast paramDtFast, String datase,uint numImages,Size imgSize);
 	FastDtModel();
+	//FastDtModel(uint numLevels);
+
 
     void write(cv::FileStorage& fso) const;
     void read(const cv::FileNode& node);
 
     // Interface for Trace-Model
     void addTraceForTraceModel(uint stage,uint level,const std::vector<Point2d>& trace);
-    void computeTraceModel();
+    void computeModel();
     bool getSlopeAt(uint stage,uint level,double& slope);
-
     void getLastSt(std::vector<uint>& stages);
     bool getLevelsForStage(uint  lastStage, std::vector<uint>& levels);
+
+    // Interface for Geometry-Model
+    void addCentroidROI(Point point,uint64 rank,uint level);
+    void setGridsSize(std::vector<uint> grids);
+
+
+    // ------------ Parameters ---------------------
 
     // List of octaves of the soft cascade (in logarithmic scale)
     std::vector<int> octaves;
     // List of levels of the soft cascade
     std::vector<double> levels;
 
-    uint numLevels;
+    ParamDetectorFast paramDtFast;
+
+    // Additional information for training of trace/geometry models
+    String	dataset;
+    uint	numImages;
+    Size	imgSize;
+
 
 private:
     struct TraceModel{
@@ -70,7 +113,62 @@ private:
     	SlopesMap slopes;
 
     }traceModel;
+
+    struct GeomModel{
+
+    	struct StrongROI{
+    		StrongROI(Point p, uint64 r):point(p),rank(r){};
+
+    		Point point;
+    		uint64 rank;
+    	};
+
+    	struct AverageCov{
+    		AverageCov(){};
+    		AverageCov(Mat a, Mat c): avg(a),cov(c){};
+
+    		Mat avg;
+    		Mat cov;
+    	};
+
+    	struct Block{
+    		Block(uint levels)
+    		:levelsHist(std::vector<double>(levels,0.)),
+    		locationsHist(std::vector<AverageCov>(levels,AverageCov())),
+    		energy(0.){};
+
+    		Block(std::vector<double> lvH,std::vector<AverageCov> locH, Rect rt, double e)
+    		:levelsHist(lvH), locationsHist(locH), rect(rt), energy(e){};
+
+    		std::vector<double>  	levelsHist;
+    		std::vector<AverageCov> locationsHist;
+    		Rect rect;
+    		double 					energy;
+     	};
+
+    	typedef std::map<uint,std::vector<StrongROI> > StrongsROI;
+
+
+    	typedef std::map<uint,std::vector<Block> > Grids;
+
+    	GeomModel(){}
+
+    	void compute(Size imageSize,uint levels);
+    	void write(FileStorage& fso) const;
+    	void read(const FileNode& node);
+
+
+    	// variables for storage input data
+    	StrongsROI  		centroids;
+    	std::vector<uint> 	gridsSize;
+
+    	// model
+    	Grids	grids;
+
+    }geomModel;
 };
+
+
 
 // required for cv::FileStorage serialization
 inline void write(cv::FileStorage& fso, const std::string&, const FastDtModel& x){
@@ -95,7 +193,8 @@ public:
     // Param minScale 		is a maximum scale relative to the original size of the image on which cascade will be applied.
     // Param scales 		is a number of scales from minScale to maxScale.
     // Param rejCriteria 	is used for NMS.
-    CV_WRAP DetectorFast(double minScale = 0.4, double maxScale = 5., int scales = 55, int rejCriteria = 1);
+    //CV_WRAP DetectorFast(double minScale = 0.4, double maxScale = 5., int scales = 55, int rejCriteria = 1);
+	CV_WRAP DetectorFast(ParamDetectorFast parameters);
 
     CV_WRAP ~DetectorFast();
 
@@ -109,7 +208,7 @@ public:
     // Param image is a frame on which detector will be applied.
     // Param rois is a vector of regions of interest. Only the objects that fall into one of the regions will be returned.
     // Param objects is an output array of Detections
-    virtual void detectFast(cv::InputArray _image,std::vector<Detection>& objects, uint lastStage);
+    virtual void detectFast(cv::InputArray _image,std::vector<Detection>& objects);
 
 
     CV_WRAP uint getNumLevels();
@@ -125,7 +224,7 @@ private:
     	int*	weaks;
     };
 
-	TempInfo tempI;
+	TempInfo 	tempI;
 	FastDtModel fastModel;
 };
 
@@ -144,7 +243,6 @@ struct CV_EXPORTS Trace{
 	// Param numLevel  		is number of level  (inner of pyramid) that contain the positive detection window
 	// Param dw				is detection window
 	// Param subScores		is detector result (positive detection window)
-	// Param classification is detector result (positive detection window)
 	Trace(const uint64 ind,const uint octave, const uint level, const Detection& dw, const std::vector<float>& scores, const std::vector<float>& stagesResp, const int classification);
 
 	enum{NEGATIVE=0,POSITIVE,LOCALMAXIMUM};
@@ -168,7 +266,8 @@ public:
     // Param minScale 		is a maximum scale relative to the original size of the image on which cascade will be applied.
     // Param scales 		is a number of scales from minScale to maxScale.
     // Param rejCriteria 	is used for NMS.
-    CV_WRAP DetectorTrace(double minScale = 0.4, double maxScale = 5., int scales = 55, int rejCriteria = 1);
+    //CV_WRAP DetectorTrace(double minScale = 0.4, double maxScale = 5., int scales = 55, int rejCriteria = 1);
+    CV_WRAP DetectorTrace(ParamDetectorFast param);
 
     CV_WRAP ~DetectorTrace();
 

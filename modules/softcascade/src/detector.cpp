@@ -43,6 +43,7 @@
 #include "precomp.hpp"
 #include "opencv2/softcascade_fast.hpp"
 #include <opencv2/imgproc.hpp>
+#include <iostream>
 
 cv::softcascade::Detection::Detection(const cv::Rect& b, const float c, int k)
 : x(static_cast<ushort>(b.x)), y(static_cast<ushort>(b.y)),
@@ -658,6 +659,207 @@ void cv::softcascade::FastDtModel::TraceModel::read(const FileNode& node){
 	}
 	linesParam.clear();
 }
+
+void cv::softcascade::FastDtModel::GeomModel::write(FileStorage& fso) const{
+
+	fso << "Grids" <<  "[";
+
+
+	Grids::const_iterator itG=grids.begin();
+	for( ;itG!=grids.end();++itG){
+		fso << "{";
+		fso<< "size" << (int)itG->first;
+		fso << "Blocks" << "[";
+		uint id=0;
+		for(std::vector<Block>::const_iterator itB=itG->second.begin();itB!=itG->second.end();++itB){
+			fso<<"{";
+			fso<<"id" <<(int) id++;
+			fso<< "levelsHist" 		<< itB->levelsHist;
+			fso<< "locationsHist";
+			fso<<"{";
+
+			fso<<"averages" << "[";
+			for(std::vector<AverageCov>::const_iterator itA=itB->locationsHist.begin();itA!=itB->locationsHist.end();++itA)
+				fso << itA->avg;
+			fso<<"]";
+
+			fso<<"covariances" << "[";
+			for(std::vector<AverageCov>::const_iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC)
+				fso << itC->cov;
+			fso<<"]";
+
+			fso<<"}";
+			fso<< "rect" 			<< itB->rect;
+			fso<< "energy" 			<< itB->energy;
+			fso<<"}";
+		}
+		fso<< "]";
+		fso << "}";
+	}
+
+	fso<< "]";
+
+}
+void cv::softcascade::FastDtModel::GeomModel::read(const FileNode& node){
+
+
+	FileNode gridsNode = node["Grids"];
+
+	grids.clear();
+
+	for(FileNodeIterator itG=gridsNode.begin();itG!=gridsNode.end();++itG){
+
+		int gridSize=(int)(*itG)["size"];
+		FileNode blocksNode = (*itG)["Blocks"];
+		grids[gridSize]= std::vector<Block>();
+
+		for(FileNodeIterator itB=blocksNode.begin();itB!=blocksNode.end();++itB){
+
+			std::vector<double> levelsHist;
+			(*itB)["levelsHist"] >> levelsHist;
+
+
+
+    		std::vector<AverageCov> locationsHist;
+    		FileNode avgNode =(*itB)["locationsHist"]["averages"];
+    		FileNode covNode=(*itB)["locationsHist"]["covariances"];
+    		for(FileNodeIterator itAvg=avgNode.begin(), itCov=covNode.begin(); itAvg!=avgNode.end();++itAvg,++itCov){
+    			Mat avgM,covM;
+    			(*itAvg) >> avgM;
+    			(*itCov) >> covM;
+    			locationsHist.push_back(AverageCov(avgM,covM));
+    		}
+
+    		Rect rect;
+    		(*itB)["rect"] >> rect;
+
+    		double	energy=(double)(*itB)["energy"];
+
+			grids[gridSize].push_back(Block(levelsHist,locationsHist,rect,energy));
+
+		}
+	}
+}
+
+
+void cv::softcascade::FastDtModel::GeomModel::compute(Size imgSize,uint levels){
+
+	typedef std::map<uint,std::vector<std::vector<std::vector<double> > > > Locations;
+	Locations strongLoc;
+
+	std::map<uint,double> energyTot;
+
+	std::cout<<"---- Geometric Model:  Frame Splits ----" <<std::endl;
+	// initialize block and levels and energy histograms
+	for(uint g=0;g<gridsSize.size();g++){
+		grids[gridsSize[g]]=std::vector<Block>(gridsSize[g]*gridsSize[g],Block(levels));
+		strongLoc[gridsSize[g]]= std::vector<std::vector<std::vector<double> > >  (gridsSize[g]*gridsSize[g], std::vector<std::vector<double> >(levels,std::vector<double>()));
+
+		// compute rect for each block
+		uint dw=  imgSize.width/gridsSize[g];
+		uint dh= imgSize.height/gridsSize[g];
+
+
+		std::cout<<"Grid Size: " <<gridsSize[g]<<"x"<<gridsSize[g] <<std::endl;
+
+		uint count=0;
+		for(uint b_y=0,y=0;b_y<gridsSize[g];b_y++,y+=dh+1){
+			for(uint b_x=0,x=0;b_x<gridsSize[g];b_x++, x+=dw+1){
+				std::cout<<"\t Size Block "<<count<<": rect("<<x<<","<<y<<","<<dw<<","<<dh<<")"<<std::endl;
+				grids[gridsSize[g]][count++].rect=Rect(x,y,dw,dh);
+			}
+		}
+
+	}
+
+	// extraction statistics of strongs for all grids size: levels histogram (not-normalized) and locations
+	for(StrongsROI::iterator l_s=centroids.begin();l_s!=centroids.end();++l_s){
+		uint level=l_s->first;
+
+		for(std::vector<StrongROI>::iterator s=l_s->second.begin();s!=l_s->second.end();++s){
+			for(Grids::iterator g=grids.begin();g!=grids.end();++g){
+				for(std::vector<Block>::iterator b=g->second.begin();b!=g->second.end();++b){
+					if(b->rect.contains(s->point)){
+						b->levelsHist[level]+=s->rank;
+
+						// insert location in the order: x y
+						strongLoc[g->first][b-g->second.begin()][level].push_back(s->point.x);
+						strongLoc[g->first][b-g->second.begin()][level].push_back(s->point.y);
+						break;
+					}
+				}
+			}
+		}
+	}
+	std::cout<<"---- Geometric Model:  Computation Average and Covariance Matrix ----" <<std::endl;
+	// computation average and covariance position for each block_level
+	for(Grids::iterator g=grids.begin();g!=grids.end();++g){
+		energyTot[g->first]=0.;
+		std::cout<<"Grid " <<g->first<<"x"<<g->first <<std::endl;
+		for(std::vector<Block>::iterator b=g->second.begin();b!=g->second.end();++b){
+			std::cout<<"\t Block " <<b-g->second.begin() <<std::endl;
+			energyTot[g->first]+=std::accumulate(b->levelsHist.begin(),b->levelsHist.end(),0.);
+
+			// compute average and covariance
+			for(uint level=0;level<levels;level++){
+				std::cout<<"\t\t Level " <<level<<": ";
+				uint nStrong=(uint)((double) strongLoc[g->first][b-g->second.begin()][level].size()/2);
+
+				if(nStrong>0){
+					Mat positions(nStrong,2,CV_64F, strongLoc[g->first][b-g->second.begin()][level].data());
+					try{
+						// CV_COVAR_NORMAL=1, CV_COVAR_ROWS=8
+						calcCovarMatrix(positions, b->locationsHist[level].cov,b->locationsHist[level].avg, 1 | 8);
+						std::cout<<nStrong<<" strongs detected for this level"<<std::endl;
+
+					}
+					catch (Exception e) {
+						b->locationsHist[level].avg=Mat(1,2,CV_64F,-1);
+						b->locationsHist[level].cov=Mat(2,2,CV_64F,0.);
+						std::cout<<"<<"<<nStrong<<" strongs detected with exception --> default init."<<std::endl;
+					}
+				}
+				else{
+					std::cout<<"<<No strongs detected for this level>> --> default init."<<std::endl;
+					b->locationsHist[level].avg=Mat(1,2,CV_64F,-1);
+					b->locationsHist[level].cov=Mat(2,2,CV_64F,0.);
+				}
+				std::cout<<"\t\t\t Average Matrix: "<<b->locationsHist[level].avg.at<double>(0,0)<< " "
+						<<b->locationsHist[level].avg.at<double>(0,1)<< std::endl;
+
+				std::cout<<"\t\t\t Covariance Matrix: "<< b->locationsHist[level].cov.at<double>(0,0)<< " "
+					     <<b->locationsHist[level].cov.at<double>(0,1)<< " "
+						<< b->locationsHist[level].cov.at<double>(1,0)<< " "
+						<< b->locationsHist[level].cov.at<double>(1,1)<<std::endl;
+			}
+		}
+	}
+
+
+	std::cout<<"---- Geometric Model:  Energy computation and levels histogram normalization ----" <<std::endl;
+	// computation energy for each block and normalization of levels histogram
+	for(Grids::iterator g=grids.begin();g!=grids.end();++g){
+		std::cout<<"Grid " <<g->first<<"x"<<g->first <<std::endl;
+		for(std::vector<Block>::iterator b=g->second.begin();b!=g->second.end();++b){
+			std::cout<<"\t Block " <<b-g->second.begin() <<std::endl;
+			double levHistAcc=std::accumulate(b->levelsHist.begin(),b->levelsHist.end(),0.);
+
+			// energy
+			b->energy=levHistAcc/energyTot[g->first];
+
+			// levels histogram normalization
+			if(levHistAcc>0){
+				for(uint l=0;l<levels;l++)
+					b->levelsHist[l]/=levHistAcc;
+			}
+			std::cout<<"\t Levels Histogram: ";
+			for(uint i=0;i<b->levelsHist.size();i++)
+				std::cout<<b->levelsHist[i]<<" ";
+			std::cout<<std::endl;
+		}
+	}
+}
+
 bool cv::softcascade::FastDtModel::getSlopeAt(uint stage,uint level,double& slope){
 	try{
 		slope= traceModel.slopes.at(stage).at(level);
@@ -679,8 +881,6 @@ void cv::softcascade::FastDtModel::getLastSt(std::vector<uint>& stages){
 bool cv::softcascade::FastDtModel::getLevelsForStage(uint  lastStage, std::vector<uint>& levels){
 	levels.clear();
 
-
-
 	try{
 		std::map<uint,double > lv= traceModel.slopes.at(lastStage);
 		for(std::map<uint,double >::iterator itL=lv.begin();itL!=lv.end();++itL)
@@ -692,12 +892,22 @@ bool cv::softcascade::FastDtModel::getLevelsForStage(uint  lastStage, std::vecto
 	}
 }
 
-cv::softcascade::FastDtModel::FastDtModel(uint numL)
-: numLevels(numL)
+cv::softcascade::ParamDetectorFast::ParamDetectorFast()
+: minScale(0.4) , maxScale(5.), nScales(55), nMS(1),lastStage(512)
+{
+
+}
+cv::softcascade::ParamDetectorFast::ParamDetectorFast(double minS, double maxS, uint nS, int noMS, uint lastSt, uint gridS)
+: minScale(minS) , maxScale(maxS), nScales(nS), nMS(noMS),lastStage(lastSt), gridSize(gridS)
+{}
+
+
+cv::softcascade::FastDtModel::FastDtModel()
 {	octaves.clear();
 	levels.clear();
 }
-cv::softcascade::FastDtModel::FastDtModel()
+cv::softcascade::FastDtModel::FastDtModel(ParamDetectorFast param, String data="",uint numImg=-1, Size imgS=Size(0,0))
+: paramDtFast(param), dataset(data), numImages(numImg),imgSize(imgS)
 {	octaves.clear();
 	levels.clear();
 }
@@ -706,16 +916,41 @@ cv::softcascade::FastDtModel::FastDtModel()
 void cv::softcascade::FastDtModel::FastDtModel::write(cv::FileStorage& fso) const{
 
 	fso<<"{";
-		fso<<"Trace_Model"<< "{";
-		traceModel.write(fso);
+		// Pyramid Section
+		fso<<"Pyramid_Setting"<< "{";
+			fso<< "minScale" << paramDtFast.minScale;
+			fso<< "maxScale" << paramDtFast.maxScale;
+			fso<< "nScales"  << (int) paramDtFast.nScales;
+			fso<< "minScale" << paramDtFast.minScale;
+			fso<< "minScale" << paramDtFast.minScale;
+		fso<< "}";
+
+		// Training Set Section
+		fso<<"Trainin_Set"<< "{";
+			fso<< "dataset" << dataset;
+			fso<< "numImages" << (int) numImages;
+			fso<< "imageSize" << imgSize;
+		fso<< "}";
+
+		// Models
+		fso<<"Models"<< "{";
+			// Trace-model Section
+			fso<<"Trace_Model"<< "{";
+			traceModel.write(fso);
+			fso<< "}";
+
+			// Geometry-model Sction
+			fso<<"Geometry_Model"<< "{";
+			geomModel.write(fso);
+			fso<< "}";
 		fso<< "}";
 
 	fso<< "}";
-
 }
 void cv::softcascade::FastDtModel::FastDtModel::read(const cv::FileNode& node){
 
 	traceModel.read(node["Trace_Model"]);
+	geomModel.read(node["Geometry_Model"]);
 }
 
 
@@ -728,14 +963,26 @@ void cv::softcascade::FastDtModel::addTraceForTraceModel(uint stage,uint level,c
 	traceModel.linesParam[stage][level].push_back(Vec4f(line));
 }
 
-void cv::softcascade::FastDtModel::computeTraceModel(){
+void cv::softcascade::FastDtModel::computeModel(){
 	traceModel.compute();
+	geomModel.compute(imgSize, paramDtFast.nScales);
+}
+
+void cv::softcascade::FastDtModel::addCentroidROI(Point point,uint64 rank,uint level){
+
+	geomModel.centroids[level].push_back(GeomModel::StrongROI(point,rank));
+
+}
+void cv::softcascade::FastDtModel::setGridsSize(std::vector<uint> grids){
+	geomModel.gridsSize=grids;
 }
 
 
+cv::softcascade::DetectorFast::DetectorFast(ParamDetectorFast param)
+:Detector(param.minScale, param.maxScale, param.nScales, param.nMS),fastModel(param)
+{
 
-cv::softcascade::DetectorFast::DetectorFast(double mins, double maxs, int nsc, int rej)
-:Detector(mins, maxs, nsc, rej){}
+}
 
 cv::softcascade::DetectorFast::~DetectorFast() {}
 
@@ -754,11 +1001,14 @@ bool cv::softcascade::DetectorFast::loadModel(const FileNode& fastNode){
 
 
 
+
+
 	try{
 		fastNode >> fastModel;
 	}catch (Exception& e) {
 		return false;
 	}
+
 
 	return true;
 }
@@ -768,9 +1018,10 @@ bool cv::softcascade::DetectorFast::load(const FileNode& cascadeModel,const File
 	return Detector::load(cascadeModel)&&loadModel(fastModel);
 }
 
-void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector<Detection>& objects, uint lastStage)
+void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector<Detection>& objects)
 {
 
+	uint lastStage=fastModel.paramDtFast.lastStage;
 	// set new recjection criteria and octave'paramters for tracerestore it later
 	rejCriteria=NO_REJECT;
 	for (uint i=0;i<fields->octaves.size();i++){
@@ -816,7 +1067,7 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector
         fastModel.getSlopeAt(lastStage,it-fld.levels.begin(),slope);
 
         for(uint i=currentSize;i<objects.size();i++){
-        	objects[i].confidence+=(1024+1-lastStage)*slope;
+        	objects[i].confidence+=(1024-lastStage)*slope;
         }
 //######################################################################
     }
@@ -864,6 +1115,7 @@ void DollarNMSTrace(std::vector<cv::softcascade::Trace>& positiveTrace, bool noM
     {
         const Detection &a = dIt->detection;
         positiveTrace[dIt->index].classType=cv::softcascade::Trace::LOCALMAXIMUM;
+        positiveTrace[dIt->index].localMaxIndex=dIt->index;
 
         for (std::vector<cv::softcascade::Trace>::iterator next = dIt + 1; next != objects.end(); )
         {
@@ -896,8 +1148,13 @@ cv::softcascade::Trace::Trace(const uint64 ind,const uint octave, const uint lev
  :index(ind),octaveIndex(octave),levelIndex(level),detection(dw.bb(),dw.confidence,dw.kind), subscores(scores),stages(stagesResp),classType(classification) {localMaxIndex=-1;}
 
 
+/*
 cv::softcascade::DetectorTrace::DetectorTrace(const double mins, const double maxs, const int nsc, const int rej)
 : Detector(mins,maxs,nsc,rej) {traceType2Return= LOCALMAXIMUM_TR;}
+*/
+
+cv::softcascade::DetectorTrace::DetectorTrace(ParamDetectorFast param)
+: Detector(param.minScale,param.maxScale,param.nScales,param.nMS) {traceType2Return= LOCALMAXIMUM_TR;}
 
 cv::softcascade::DetectorTrace::~DetectorTrace() {}
 
@@ -970,7 +1227,7 @@ void cv::softcascade::DetectorTrace::detectAtTrace(const int dx, const int dy, c
 	cv::Rect rect(cvRound(dx * shrinkage), cvRound(dy * shrinkage), level.objSize.width, level.objSize.height);
 
 
-	if (detectionScore > 0 ){
+	if (detectionScore > 0. ){
 		if(traceType2Return!=NEGATIVE_TR)
 		positiveTrace.push_back(cv::softcascade::Trace(
 				static_cast<uint64>(positiveTrace.size()),octave.index,levelI,cv::softcascade::Detection(rect, detectionScore),subScores,stages,Trace::POSITIVE));

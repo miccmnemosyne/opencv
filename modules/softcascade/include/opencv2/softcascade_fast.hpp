@@ -54,6 +54,21 @@ struct CV_EXPORTS ParamDetectorFast
 
 struct CV_EXPORTS FastDtModel
 {
+	// tag for model (xml file)
+	static const char *const ROOT;
+	static const char *const PYRAMID;
+	static const char *const PYRAMID_MINS;
+	static const char *const PYRAMID_MAXS;
+	static const char *const PYRAMID_NS;
+
+	static const char *const TRAININGS;
+	static const char *const TRAININGS_DATAF;
+	static const char *const TRAININGS_NIMG;
+	static const char *const TRAININGS_IMGS;
+
+	static const char *const MODELS;
+
+
 	FastDtModel(ParamDetectorFast paramDtFast, String datase,uint numImages,Size imgSize);
 	FastDtModel();
 	//FastDtModel(uint numLevels);
@@ -94,14 +109,22 @@ private:
 #define Vx  0
 #define Vy  1
 
+    	static const char *const TRACEMODEL;
+    	static const char *const TRACEMODEL_LASTSTAGES;
+    	static const char *const TRACEMODEL_LASTSTAGES_LASTS;
+    	static const char *const TRACEMODEL_LASTSTAGES_SLOPES;
+
+
+
     	typedef std::map<uint,std::map<uint,std::vector<Vec4f> > > LinesMap;
     	typedef std::map<uint,std::vector<Vec4f> >  LevelsMap;
-    	typedef std::map<uint,std::map<uint,double > > SlopesMap;
+    	//typedef std::map<uint,std::map<uint,double > > SlopesMap;
+    	typedef std::map<uint,std::vector<double> > SlopesMap;
 
 
     	TraceModel(){}
 
-    	void compute();
+    	void compute(uint levels);
     	void write(FileStorage& fso) const;
     	void read(const FileNode& node);
 
@@ -114,7 +137,19 @@ private:
 
     }traceModel;
 
+
     struct GeomModel{
+    	static const char *const GEOMMODEL;
+    	static const char *const GEOMMODEL_GRIDS;
+    	static const char *const GEOMMODEL_GRID_SIZE;
+    	static const char *const GEOMMODEL_GRID_BLOCKS;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_ID;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_LEVELSH;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_RECT;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_ENERGY;
 
     	struct StrongROI{
     		StrongROI(Point p, uint64 r):point(p),rank(r){};
@@ -167,7 +202,34 @@ private:
 
     }geomModel;
 };
+const char *const FastDtModel::ROOT="Fast_Detector";
+const char *const FastDtModel::PYRAMID="Pyramid_Setting";
+const char *const FastDtModel::PYRAMID_MINS="minScale";
+const char *const FastDtModel::PYRAMID_MAXS="maxScale";
+const char *const FastDtModel::PYRAMID_NS="nScales";
+const char *const FastDtModel::TRAININGS="Training_Set";
+const char *const FastDtModel::TRAININGS_DATAF="datasetFolder";
+const char *const FastDtModel::TRAININGS_NIMG="numImages";
+const char *const FastDtModel::TRAININGS_IMGS="imageSize";
+const char *const FastDtModel::MODELS="Models";
 
+const char *const FastDtModel::TraceModel::TRACEMODEL="Trace_Model";
+const char *const FastDtModel::TraceModel::TRACEMODEL_LASTSTAGES="LastStages";
+const char *const FastDtModel::TraceModel::TRACEMODEL_LASTSTAGES_LASTS="lastStage";
+const char *const FastDtModel::TraceModel::TRACEMODEL_LASTSTAGES_SLOPES="slopes";
+
+
+const char *const FastDtModel::GeomModel::GEOMMODEL="Geometry_Model";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRIDS="Grids";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_SIZE="size";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS="Blocks";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_ID="id";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LEVELSH="levelsHist";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH="locationsHist";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG="averages";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV="covariances";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_RECT="rect";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_ENERGY="energy";
 
 
 // required for cv::FileStorage serialization
@@ -181,6 +243,7 @@ inline void read(const cv::FileNode& node, FastDtModel& x, const FastDtModel& de
 		x.read(node);
 
 }
+// For print FastModel to the console
 std::ostream& operator<<(std::ostream& out, const FastDtModel& m);
 
 

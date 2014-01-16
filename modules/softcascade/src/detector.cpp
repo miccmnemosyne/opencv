@@ -604,13 +604,19 @@ void cv::softcascade::Detector::detect(InputArray _image, InputArray _rois,  Out
 // ============================================================================================================== //
 //		     Implementation of DetectorFast (with trace evaluation reduction)
 // ============================================================================================================= //
-void cv::softcascade::FastDtModel::TraceModel::compute(){
+
+
+
+
+void cv::softcascade::FastDtModel::TraceModel::compute(uint levels){
 
 	slopes.clear();
 
 	double slopeSum;
 
+
 	for(LinesMap::iterator itS=linesParam.begin();itS!=linesParam.end();++itS){
+		slopes[itS->first]=std::vector<double>(levels,0.);
 		for(LevelsMap::iterator itL=itS->second.begin();itL!=itS->second.end();++itL){
 			slopeSum=0.;
 			for (std::vector<Vec4f>::iterator it=itL->second.begin();it!=itL->second.end();++it)
@@ -621,76 +627,72 @@ void cv::softcascade::FastDtModel::TraceModel::compute(){
 }
 void cv::softcascade::FastDtModel::TraceModel::write(FileStorage& fso) const{
 
-	fso << "LastStages" <<  "[";
+	fso << TraceModel::TRACEMODEL_LASTSTAGES<<  "[";
 
 
 	SlopesMap::const_iterator itS= slopes.begin();
 	for( ;itS!=slopes.end();++itS){
 		fso << "{";
-		fso<< "lastStage" << (int)itS->first;
-		fso << "Levels" << "[";
-		for(std::map<uint,double >::const_iterator itL=itS->second.begin();itL!=itS->second.end();++itL){
-			fso<<"{";
-			fso<< "level" << (int)itL->first;
-			fso<< "slope" << itL->second;
-			fso<<"}";
-		}
-		fso<< "]";
+		fso<< TraceModel::TRACEMODEL_LASTSTAGES_LASTS << (int)itS->first;
+		fso<< TraceModel::TRACEMODEL_LASTSTAGES_SLOPES << "[";
+		for(std::vector<double >::const_iterator itL=itS->second.begin();itL!=itS->second.end();++itL)
+			fso<< *itL;
+		fso << "]";
 		fso << "}";
 	}
-
 	fso<< "]";
 
 }
 void cv::softcascade::FastDtModel::TraceModel::read(const FileNode& node){
 
 
-	FileNode lastStages = node["LastStages"];
+	FileNode lastStages = node[TRACEMODEL_LASTSTAGES];
 
 	slopes.clear();
 
 	for(FileNodeIterator itS=lastStages.begin();itS!=lastStages.end();++itS){
-		int stage=(int)(*itS)["lastStage"];
-		FileNode Levels = (*itS)["Levels"];
+		int stage=(int)(*itS)[TRACEMODEL_LASTSTAGES_LASTS];
+		FileNode slopesN = (*itS)[TRACEMODEL_LASTSTAGES_SLOPES];
 
-		for(FileNodeIterator itL=Levels.begin();itL!=Levels.end();++itL){
-			slopes[stage][(int)(*itL)["level"]]=(double)(*itL)["slope"];
-		}
+		slopesN >> slopes[stage];
+
+		/*for(FileNodeIterator itSl=slopesN.begin();itSl!=slopesN.end();++itSl)
+			slopes[stage][itSl-slopesN.begin()]=(double)(*itSl);*/
 	}
 	linesParam.clear();
 }
 
 void cv::softcascade::FastDtModel::GeomModel::write(FileStorage& fso) const{
 
-	fso << "Grids" <<  "[";
+	fso << GEOMMODEL_GRIDS <<  "[";
 
 
 	Grids::const_iterator itG=grids.begin();
 	for( ;itG!=grids.end();++itG){
 		fso << "{";
-		fso<< "size" << (int)itG->first;
-		fso << "Blocks" << "[";
+		fso<< GEOMMODEL_GRID_SIZE << (int)itG->first;
+		fso << GEOMMODEL_GRID_BLOCKS << "[";
 		uint id=0;
 		for(std::vector<Block>::const_iterator itB=itG->second.begin();itB!=itG->second.end();++itB){
 			fso<<"{";
-			fso<<"id" <<(int) id++;
-			fso<< "levelsHist" 		<< itB->levelsHist;
-			fso<< "locationsHist";
+			fso<< GEOMMODEL_GRID_BLOCKS_ID <<(int) id++;
+			fso<< GEOMMODEL_GRID_BLOCKS_LEVELSH	<< itB->levelsHist;
+			fso<< GEOMMODEL_GRID_BLOCKS_LOCATIONSH;
 			fso<<"{";
 
-			fso<<"averages" << "[";
+			fso<< GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG << "[";
 			for(std::vector<AverageCov>::const_iterator itA=itB->locationsHist.begin();itA!=itB->locationsHist.end();++itA)
 				fso << itA->avg;
 			fso<<"]";
 
-			fso<<"covariances" << "[";
+			fso<< GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV << "[";
 			for(std::vector<AverageCov>::const_iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC)
 				fso << itC->cov;
 			fso<<"]";
 
 			fso<<"}";
-			fso<< "rect" 			<< itB->rect;
-			fso<< "energy" 			<< itB->energy;
+			fso<<  GEOMMODEL_GRID_BLOCKS_RECT << itB->rect;
+			fso<<  GEOMMODEL_GRID_BLOCKS_ENERGY	<< itB->energy;
 			fso<<"}";
 		}
 		fso<< "]";
@@ -703,26 +705,24 @@ void cv::softcascade::FastDtModel::GeomModel::write(FileStorage& fso) const{
 void cv::softcascade::FastDtModel::GeomModel::read(const FileNode& node){
 
 
-	FileNode gridsNode = node["Grids"];
+	FileNode gridsNode = node[GEOMMODEL_GRIDS];
 
 	grids.clear();
 
 	for(FileNodeIterator itG=gridsNode.begin();itG!=gridsNode.end();++itG){
 
-		int gridSize=(int)(*itG)["size"];
-		FileNode blocksNode = (*itG)["Blocks"];
-		grids[gridSize]= std::vector<Block>();
+		int gridSize=(int)(*itG)[GEOMMODEL_GRID_SIZE];
+		FileNode blocksNode = (*itG)[GEOMMODEL_GRID_BLOCKS];
 
+		grids[gridSize]=std::vector<Block>();
 		for(FileNodeIterator itB=blocksNode.begin();itB!=blocksNode.end();++itB){
 
 			std::vector<double> levelsHist;
-			(*itB)["levelsHist"] >> levelsHist;
-
-
+			(*itB)[GEOMMODEL_GRID_BLOCKS_LEVELSH] >> levelsHist;
 
     		std::vector<AverageCov> locationsHist;
-    		FileNode avgNode =(*itB)["locationsHist"]["averages"];
-    		FileNode covNode=(*itB)["locationsHist"]["covariances"];
+    		FileNode avgNode =(*itB)[GEOMMODEL_GRID_BLOCKS_LOCATIONSH][GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG];
+    		FileNode covNode=(*itB)[GEOMMODEL_GRID_BLOCKS_LOCATIONSH][GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV];
     		for(FileNodeIterator itAvg=avgNode.begin(), itCov=covNode.begin(); itAvg!=avgNode.end();++itAvg,++itCov){
     			Mat avgM,covM;
     			(*itAvg) >> avgM;
@@ -731,9 +731,9 @@ void cv::softcascade::FastDtModel::GeomModel::read(const FileNode& node){
     		}
 
     		Rect rect;
-    		(*itB)["rect"] >> rect;
+    		(*itB)[GEOMMODEL_GRID_BLOCKS_RECT] >> rect;
 
-    		double	energy=(double)(*itB)["energy"];
+    		double	energy=(double)(*itB)[GEOMMODEL_GRID_BLOCKS_ENERGY];
 
 			grids[gridSize].push_back(Block(levelsHist,locationsHist,rect,energy));
 
@@ -862,7 +862,7 @@ void cv::softcascade::FastDtModel::GeomModel::compute(Size imgSize,uint levels){
 
 bool cv::softcascade::FastDtModel::getSlopeAt(uint stage,uint level,double& slope){
 	try{
-		slope= traceModel.slopes.at(stage).at(level);
+		slope= traceModel.slopes.at(stage)[level];
 		return true;
 	}
 	catch (Exception& e) {
@@ -882,9 +882,8 @@ bool cv::softcascade::FastDtModel::getLevelsForStage(uint  lastStage, std::vecto
 	levels.clear();
 
 	try{
-		std::map<uint,double > lv= traceModel.slopes.at(lastStage);
-		for(std::map<uint,double >::iterator itL=lv.begin();itL!=lv.end();++itL)
-			levels.push_back(itL->first);
+		for(uint l=0;l<traceModel.slopes.size();l++)
+			levels.push_back(l);
 		return true;
 	}
 	catch (Exception& e) {
@@ -917,30 +916,28 @@ void cv::softcascade::FastDtModel::FastDtModel::write(cv::FileStorage& fso) cons
 
 	fso<<"{";
 		// Pyramid Section
-		fso<<"Pyramid_Setting"<< "{";
-			fso<< "minScale" << paramDtFast.minScale;
-			fso<< "maxScale" << paramDtFast.maxScale;
-			fso<< "nScales"  << (int) paramDtFast.nScales;
-			fso<< "minScale" << paramDtFast.minScale;
-			fso<< "minScale" << paramDtFast.minScale;
+		fso<< PYRAMID<< "{";
+			fso<< PYRAMID_MINS << paramDtFast.minScale;
+			fso<< PYRAMID_MAXS << paramDtFast.maxScale;
+			fso<< PYRAMID_NS  << (int) paramDtFast.nScales;
 		fso<< "}";
 
 		// Training Set Section
-		fso<<"Trainin_Set"<< "{";
-			fso<< "dataset" << dataset;
-			fso<< "numImages" << (int) numImages;
-			fso<< "imageSize" << imgSize;
+		fso<< TRAININGS << "{";
+			fso<< TRAININGS_DATAF<< dataset;
+			fso<< TRAININGS_NIMG << (int) numImages;
+			fso<< TRAININGS_IMGS << imgSize;
 		fso<< "}";
 
 		// Models
-		fso<<"Models"<< "{";
+		fso<< MODELS<< "{";
 			// Trace-model Section
-			fso<<"Trace_Model"<< "{";
+			fso<<TraceModel::TRACEMODEL<< "{";
 			traceModel.write(fso);
 			fso<< "}";
 
 			// Geometry-model Sction
-			fso<<"Geometry_Model"<< "{";
+			fso<<GeomModel::GEOMMODEL<< "{";
 			geomModel.write(fso);
 			fso<< "}";
 		fso<< "}";
@@ -949,8 +946,8 @@ void cv::softcascade::FastDtModel::FastDtModel::write(cv::FileStorage& fso) cons
 }
 void cv::softcascade::FastDtModel::FastDtModel::read(const cv::FileNode& node){
 
-	traceModel.read(node["Trace_Model"]);
-	geomModel.read(node["Geometry_Model"]);
+	traceModel.read(node[MODELS][TraceModel::TRACEMODEL]);
+	geomModel.read(node[MODELS][GeomModel::GEOMMODEL]);
 }
 
 
@@ -964,7 +961,7 @@ void cv::softcascade::FastDtModel::addTraceForTraceModel(uint stage,uint level,c
 }
 
 void cv::softcascade::FastDtModel::computeModel(){
-	traceModel.compute();
+	traceModel.compute(paramDtFast.nScales);
 	geomModel.compute(imgSize, paramDtFast.nScales);
 }
 
@@ -998,10 +995,6 @@ bool cv::softcascade::DetectorFast::loadModel(const FileNode& fastNode){
 		tempI.index[i]=fields->octaves[i].index;
 		tempI.weaks[i]=fields->octaves[i].weaks;
 	}
-
-
-
-
 
 	try{
 		fastNode >> fastModel;

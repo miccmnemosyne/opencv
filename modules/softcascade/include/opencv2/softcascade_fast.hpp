@@ -9,9 +9,12 @@
 #define SOFTCASCADE_FAST_HPP_
 
 #include "softcascade.hpp"
+
+#include <fstream>
 #include <map>
 #include <list>
 #include <numeric>
+#include <set>
 
 struct Level;
 struct ChannelStorage;
@@ -33,7 +36,7 @@ namespace cv { namespace softcascade {
 struct CV_EXPORTS ParamDetectorFast
 {
 	ParamDetectorFast();
-	ParamDetectorFast(double minScale, double maxScale, uint nScale, int nMS, uint lastStage, uint gridSize);
+	ParamDetectorFast(double minScale, double maxScale, uint nScale, int nMS, uint lastStage, uint gridSize,double gamma,uint round);
 
 	// pyramid settings
 	double	minScale;
@@ -48,7 +51,8 @@ struct CV_EXPORTS ParamDetectorFast
 
 	// Geometric moedl: grid size
 	uint 	gridSize;
-
+	double 	gamma;
+	uint 	round;
 };
 
 
@@ -68,6 +72,7 @@ struct CV_EXPORTS FastDtModel
 
 	static const char *const MODELS;
 
+	struct Block;
 
 	FastDtModel(ParamDetectorFast paramDtFast, String datase,uint numImages,Size imgSize);
 	FastDtModel();
@@ -85,8 +90,13 @@ struct CV_EXPORTS FastDtModel
     bool getLevelsForStage(uint  lastStage, std::vector<uint>& levels);
 
     // Interface for Geometry-Model
-    void addCentroidROI(Point point,uint64 rank,uint level);
+    void addStrongWithROI(Rect dw,uint64 rank,uint level);
     void setGridsSize(std::vector<uint> grids);
+    std::vector<Block>& getBlocks4Grid(uint gridSize);
+    void resolveWrongStd();
+    void smoothLocations();
+    void saveModelIntoDat(String path);
+
 
 
     // ------------ Parameters ---------------------
@@ -103,6 +113,28 @@ struct CV_EXPORTS FastDtModel
     uint	numImages;
     Size	imgSize;
 
+	struct AverageStd{
+		AverageStd(){};
+		AverageStd(Mat a, Mat c): avg(a),std(c){};
+
+		Mat avg;
+		Mat std;
+	};
+
+	struct Block{
+		Block(uint levels)
+		:levelsHist(std::vector<double>(levels,0.)),
+		locationsHist(std::vector<AverageStd>(levels,AverageStd())),
+		energy(0.){};
+
+		Block(std::vector<double> lvH,std::vector<AverageStd> locH, Rect rt, double e)
+		:levelsHist(lvH), locationsHist(locH), rect(rt), energy(e){};
+
+		std::vector<double>  	levelsHist;
+		std::vector<AverageStd> locationsHist;
+		Rect rect;
+		double 					energy;
+ 	};
 
 private:
     struct TraceModel{
@@ -137,7 +169,6 @@ private:
 
     }traceModel;
 
-
     struct GeomModel{
     	static const char *const GEOMMODEL;
     	static const char *const GEOMMODEL_GRIDS;
@@ -147,39 +178,17 @@ private:
     	static const char *const GEOMMODEL_GRID_BLOCKS_LEVELSH;
     	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH;
     	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG;
-    	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_STD;
     	static const char *const GEOMMODEL_GRID_BLOCKS_RECT;
     	static const char *const GEOMMODEL_GRID_BLOCKS_ENERGY;
 
     	struct StrongROI{
-    		StrongROI(Point p, uint64 r):point(p),rank(r){};
+    		StrongROI(Rect d, uint64 r):dw(d),rank(r){};
 
-    		Point point;
+    		Rect dw;
     		uint64 rank;
+
     	};
-
-    	struct AverageCov{
-    		AverageCov(){};
-    		AverageCov(Mat a, Mat c): avg(a),cov(c){};
-
-    		Mat avg;
-    		Mat cov;
-    	};
-
-    	struct Block{
-    		Block(uint levels)
-    		:levelsHist(std::vector<double>(levels,0.)),
-    		locationsHist(std::vector<AverageCov>(levels,AverageCov())),
-    		energy(0.){};
-
-    		Block(std::vector<double> lvH,std::vector<AverageCov> locH, Rect rt, double e)
-    		:levelsHist(lvH), locationsHist(locH), rect(rt), energy(e){};
-
-    		std::vector<double>  	levelsHist;
-    		std::vector<AverageCov> locationsHist;
-    		Rect rect;
-    		double 					energy;
-     	};
 
     	typedef std::map<uint,std::vector<StrongROI> > StrongsROI;
 
@@ -194,7 +203,7 @@ private:
 
 
     	// variables for storage input data
-    	StrongsROI  		centroids;
+    	StrongsROI  		upperLeftPonts;
     	std::vector<uint> 	gridsSize;
 
     	// model
@@ -227,7 +236,7 @@ const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_ID="id";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LEVELSH="levelsHist";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH="locationsHist";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG="averages";
-const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV="covariances";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_STD="standardDev";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_RECT="rect";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_ENERGY="energy";
 
@@ -245,6 +254,7 @@ inline void read(const cv::FileNode& node, FastDtModel& x, const FastDtModel& de
 }
 // For print FastModel to the console
 std::ostream& operator<<(std::ostream& out, const FastDtModel& m);
+
 
 
 class CV_EXPORTS_W DetectorFast: public Detector{
@@ -273,6 +283,8 @@ public:
     // Param objects is an output array of Detections
     virtual void detectFast(cv::InputArray _image,std::vector<Detection>& objects);
 
+    // Save both models (trace and geometry) respectively in path/Trace_Model.dat and path/Geometry_Model.dat
+    void saveModelIntoDat(String path);
 
     CV_WRAP uint getNumLevels();
 private:
@@ -289,6 +301,13 @@ private:
 
 	TempInfo 	tempI;
 	FastDtModel fastModel;
+
+};
+struct classPoint2iComp{
+	inline bool operator()(const Point2i& a, const Point2i& b){
+		return (a.x<b.x)&&(a.y!=b.y);
+
+	}
 };
 
 

@@ -681,13 +681,13 @@ void cv::softcascade::FastDtModel::GeomModel::write(FileStorage& fso) const{
 			fso<<"{";
 
 			fso<< GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG << "[";
-			for(std::vector<AverageStd>::const_iterator itA=itB->locationsHist.begin();itA!=itB->locationsHist.end();++itA)
+			for(std::vector<AverageCov>::const_iterator itA=itB->locationsHist.begin();itA!=itB->locationsHist.end();++itA)
 				fso << itA->avg;
 			fso<<"]";
 
-			fso<< GEOMMODEL_GRID_BLOCKS_LOCATIONSH_STD << "[";
-			for(std::vector<AverageStd>::const_iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC)
-				fso << itC->std;
+			fso<< GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV << "[";
+			for(std::vector<AverageCov>::const_iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC)
+				fso << itC->cov;
 			fso<<"]";
 
 			fso<<"}";
@@ -720,16 +720,19 @@ void cv::softcascade::FastDtModel::GeomModel::read(const FileNode& node){
 			std::vector<double> levelsHist;
 			(*itB)[GEOMMODEL_GRID_BLOCKS_LEVELSH] >> levelsHist;
 
-    		std::vector<AverageStd> locationsHist;
+    		std::vector<AverageCov> locationsHist;
     		FileNode avgNode =(*itB)[GEOMMODEL_GRID_BLOCKS_LOCATIONSH][GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG];
-    		FileNode covNode=(*itB)[GEOMMODEL_GRID_BLOCKS_LOCATIONSH][GEOMMODEL_GRID_BLOCKS_LOCATIONSH_STD];
+    		FileNode covNode=(*itB)[GEOMMODEL_GRID_BLOCKS_LOCATIONSH][GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV];
     		for(FileNodeIterator itAvg=avgNode.begin(), itCov=covNode.begin(); itAvg!=avgNode.end();++itAvg,++itCov){
-    			Mat avgM(2,1,CV_64FC1);
-    			Mat stdM(2,1,CV_64FC1);
+    			Mat avgM(1,2,CV_64FC1);
+    			Mat covM(2,2,CV_64FC1);
 
     			(*itAvg) >> avgM;
-    			(*itCov) >> stdM;
-    			locationsHist.push_back(AverageStd(avgM,stdM));
+    			(*itCov) >> covM;
+    			//std::cout<<"Cov: "<<covM.at<double>(0,0)<<","<<covM.at<double>(0,1)<<
+    			//		covM.at<double>(1,0)<<","<<covM.at<double>(1,1)<<")"<<std::endl;
+
+    			locationsHist.push_back(AverageCov(avgM,covM));
     		}
 
     		Rect rect;
@@ -746,7 +749,7 @@ void cv::softcascade::FastDtModel::GeomModel::read(const FileNode& node){
 
 void cv::softcascade::FastDtModel::GeomModel::compute(Size imgSize,uint levels){
 
-	typedef std::map<uint,std::vector<std::vector<std::vector<int> > > > Locations;
+	typedef std::map<uint,std::vector<std::vector<std::vector<double> > > > Locations;
 	Locations strongLoc;
 
 	std::map<uint,double> energyTot;
@@ -756,7 +759,7 @@ void cv::softcascade::FastDtModel::GeomModel::compute(Size imgSize,uint levels){
 	// initialize block and levels and energy histograms
 	for(uint g=0;g<gridsSize.size();g++){
 		grids[gridsSize[g]]=std::vector<Block>(gridsSize[g]*gridsSize[g],Block(levels));
-		strongLoc[gridsSize[g]]= std::vector<std::vector<std::vector<int> > >  (gridsSize[g]*gridsSize[g], std::vector<std::vector<int> >(levels,std::vector<int>()));
+		strongLoc[gridsSize[g]]= std::vector<std::vector<std::vector<double> > >  (gridsSize[g]*gridsSize[g], std::vector<std::vector<double> >(levels,std::vector<double>()));
 
 		// compute rect for each block
 		uint dw=  imgSize.width/gridsSize[g];
@@ -787,8 +790,8 @@ void cv::softcascade::FastDtModel::GeomModel::compute(Size imgSize,uint levels){
 						b->levelsHist[level]+=s->rank;
 
 						// insert location in the order: x y
-						strongLoc[g->first][b-g->second.begin()][level].push_back((int)(s->dw.x));
-						strongLoc[g->first][b-g->second.begin()][level].push_back((int)(s->dw.y));
+						strongLoc[g->first][b-g->second.begin()][level].push_back((double)(s->dw.x));
+						strongLoc[g->first][b-g->second.begin()][level].push_back((double)(s->dw.y));
 						break;
 					}
 				}
@@ -806,35 +809,38 @@ void cv::softcascade::FastDtModel::GeomModel::compute(Size imgSize,uint levels){
 
 			// compute average and covariance
 			for(uint level=0;level<levels;level++){
-				std::cout<<"\t\t Level " <<level<<": ";
+				std::cout<<"Level " <<level<<": "<<std::endl;
 				uint nStrong=(uint)((double) strongLoc[g->first][b-g->second.begin()][level].size()/2);
 
 				if(nStrong>0){
-					Mat positions(nStrong,1,CV_32SC2, strongLoc[g->first][b-g->second.begin()][level].data());
+
+					Mat positions(nStrong,2,CV_64FC1, strongLoc[g->first][b-g->second.begin()][level].data());
+
 
 					for(int row=0;row<positions.rows;row++){
-						std::cout<< positions.at<Vec2i>(row,0)[0]<<","<<positions.at<Vec2i>(row,0)[1]<<std::endl;
+						std::cout<< positions.at<Vec2d>(row,0)[0]<<","<<positions.at<Vec2d>(row,0)[1]<<std::endl;
 					}
-
+					b->locationsHist[level].cov=Mat(2,2,CV_64FC1);
+					b->locationsHist[level].avg=Mat(1,2,CV_64FC1);
 					try{
-						/*// CV_COVAR_NORMAL=1, CV_COVAR_ROWS=8
-						calcCovarMatrix(positions, b->locationsHist[level].std,b->locationsHist[level].avg, 1 | 8,CV_64FC1);
-						std::cout<<nStrong<<" strongs detected for this level"<<std::endl;*/
-
-						meanStdDev(positions,b->locationsHist[level].avg,b->locationsHist[level].std);
+						// CV_COVAR_NORMAL=1, CV_COVAR_ROWS=8
+						calcCovarMatrix(positions, b->locationsHist[level].cov,b->locationsHist[level].avg, 1 | 8,CV_64FC1);
 						std::cout<<nStrong<<" strongs detected for this level"<<std::endl;
+
+						//meanStdDev(positions,b->locationsHist[level].avg,b->locationsHist[level].cov);
+						//std::cout<<nStrong<<" strongs detected for this level"<<std::endl;
 
 					}
 					catch (Exception& e) {
-						b->locationsHist[level].avg=Mat(2,1,CV_64FC1,-1.);
-						b->locationsHist[level].std=Mat(2,1,CV_64FC1,0.);
-						std::cout<<"<<"<<nStrong<<" strongs detected with exception --> default init."<<std::endl;
+						b->locationsHist[level].avg=Mat(1,2,CV_64FC1,-1.);
+						b->locationsHist[level].cov=Mat(2,2,CV_64FC1,0.);
+						std::cout<<"<<<< Exception in covariance computation!!! >>>  DEFAULT INITIALIZATION"<<std::endl;
 					}
 				}
 				else{
 					std::cout<<"<<No strongs detected for this level>> --> default init."<<std::endl;
-					b->locationsHist[level].avg=Mat(2,1,CV_64FC1,-1.);
-					b->locationsHist[level].std=Mat(2,1,CV_64FC1,0.);
+					b->locationsHist[level].avg=Mat(1,2,CV_64FC1,-1.);
+					b->locationsHist[level].cov=Mat(2,2,CV_64FC1,0.);
 				}
 				/*std::cout<<"\t\t\t Average Matrix: "<<b->locationsHist[level].avg.at<double>(0,0)<< " "
 						<<b->locationsHist[level].avg.at<double>(0,1)<< std::endl;
@@ -991,23 +997,46 @@ void cv::softcascade::FastDtModel::resolveWrongStd(){
 
 	for(GeomModel::Grids::iterator itG=geomModel.grids.begin();itG!=geomModel.grids.end();++itG){
 		for(std::vector<Block>::iterator itB=itG->second.begin();itB!=itG->second.end();++itB){
-			for(std::vector<AverageStd>::iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC){
-				if(itC->std.at<double>(0,0)==0. && itC->std.at<double>(1,0)==0. && itC->avg.at<double>(0,0)!=-1. && itC->avg.at<double>(1,0)!=-1.){
+			for(std::vector<AverageCov>::iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC){
+
+//				std::cout<<"Average ("<<itC->avg.rows<<","<<itC->avg.cols<<")"<<std::endl;
+//				std::cout<<"Cov ("<<itC->cov.rows<<","<<itC->cov.cols<<")"<<std::endl;
+
+				// no information obtained to this level
+				if(itC->avg.at<double>(0,0)==-1. && itC->avg.at<double>(0,1)==-1.)
+					continue;
+
+				if(itC->avg.at<double>(0,0)!=-1. && itC->avg.at<double>(0,1)!=-1. 	&&
+						itC->cov.at<double>(0,0)==0. && itC->cov.at<double>(0,1)==0. &&
+				        itC->cov.at<double>(1,0)==0. && itC->cov.at<double>(1,1)==0.){
 
 
 
-					int maxW= std::min( std::abs(cvRound(itC->avg.at<double>(0,0)- itB->rect.x)),
+					int maxW= std::min(std::abs(cvRound(itC->avg.at<double>(0,0)- itB->rect.x)),
 										std::abs(cvRound(itC->avg.at<double>(0,0)-itB->rect.x-itB->rect.width))
 									);
 
-					int maxH=std::min( std::abs(cvRound(itC->avg.at<double>(1,0)- itB->rect.y)),
-							std::abs(cvRound(itC->avg.at<double>(1,0)-itB->rect.y-itB->rect.height))
+					int maxH=std::min( std::abs(cvRound(itC->avg.at<double>(0,1)- itB->rect.y)),
+							std::abs(cvRound(itC->avg.at<double>(0,1)-itB->rect.y-itB->rect.height))
 									);
 
 
 					double K=4.61;
-					itC->std.at<double>(0,0)=(double)(maxW/(2.*K));
-					itC->std.at<double>(1,0)=(double)(maxH/(2.*K));
+					itC->cov.at<double>(0,0)=(double)(pow(maxW,2)/(4.*K));
+					itC->cov.at<double>(1,1)=(double)(pow(maxH,2)/(4.*K));
+				}
+
+				// eigen decomposition cov=VDV^(-1)
+				Mat covVect=Mat(2,2,CV_64FC1);
+				Mat covVal=Mat(2,1,CV_64FC1);
+				eigen(itC->cov,covVal,covVect);
+
+				// if cov is not definite positive (has at least one eigenvalue<=0)
+				if(covVal.at<double>(0,0)<=0.|| covVal.at<double>(1,0)<=0.){
+					if(covVal.at<double>(0,0)<=0.) covVal.at<double>(0,0)=0.2+DBL_EPSILON;
+					if(covVal.at<double>(1,0)<=0.) covVal.at<double>(1,0)=0.2+DBL_EPSILON;
+					itC->cov=covVect*Mat::diag(covVal)*covVect.inv();
+					//itC->cov=covVect.inv()*Mat::diag(covVal)*covVect;
 				}
 			}
 		}
@@ -1060,11 +1089,12 @@ void cv::softcascade::FastDtModel::saveModelIntoDat(String path){
 			outFile<< ","<< itB->levelsHist[i];
 
 
-			for(std::vector<AverageStd>::const_iterator itA=itB->locationsHist.begin();itA!=itB->locationsHist.end();++itA)
+			for(std::vector<AverageCov>::const_iterator itA=itB->locationsHist.begin();itA!=itB->locationsHist.end();++itA)
 				outFile<<","<< itA->avg.at<double>(0,0)<<","<<itA->avg.at<double>(1,0);
 
-			for(std::vector<AverageStd>::const_iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC)
-				outFile<<","<< itC->std.at<double>(0,0)<<","<<itC->std.at<double>(1,0);
+			for(std::vector<AverageCov>::const_iterator itC=itB->locationsHist.begin();itC!=itB->locationsHist.end();++itC)
+				outFile<<","<< itC->cov.at<double>(0,0)<<","<<itC->cov.at<double>(0,1)<<","
+				<<itC->cov.at<double>(1,0)<<","<<itC->cov.at<double>(1,1);
 
 
 			outFile<<","<< itB->rect.x<<","<<itB->rect.y<<","<<itB->rect.width<<","<<itB->rect.height;
@@ -1109,6 +1139,272 @@ bool cv::softcascade::DetectorFast::loadModel(const FileNode& fastNode){
 
 	return true;
 }
+
+//------------ Random sampling functions ------------------
+double *cv::softcascade::DetectorFast::r8vec_uniform_01_new ( int n, int *seed )
+{
+  int i;
+  int i4_huge = 2147483647;
+  int k;
+  double *r;
+
+  if ( *seed == 0 )
+  {
+    std::cerr << "\n";
+    std::cerr << "R8VEC_UNIFORM_01_NEW - Fatal error!\n";
+    std::cerr << "  Input value of SEED = 0.\n";
+    exit ( 1 );
+  }
+
+  r = new double[n];
+
+  for ( i = 0; i < n; i++ )
+  {
+    k = *seed / 127773;
+
+    *seed = 16807 * ( *seed - k * 127773 ) - k * 2836;
+
+    if ( *seed < 0 )
+    {
+      *seed = *seed + i4_huge;
+    }
+
+    r[i] = ( double ) ( *seed ) * 4.656612875E-10;
+  }
+
+  return r;
+}
+
+double *cv::softcascade::DetectorFast::r8po_fa ( int n, double a[] )
+{
+  double *b;
+  int i;
+  int j;
+  int k;
+  double s;
+
+  b = new double[n*n];
+
+  for ( j = 0; j < n; j++ )
+  {
+    for ( i = 0; i < n; i++ )
+    {
+      b[i+j*n] = a[i+j*n];
+    }
+  }
+
+  for ( j = 0; j < n; j++ )
+  {
+    for ( k = 0; k <= j-1; k++ )
+    {
+      for ( i = 0; i <= k-1; i++ )
+      {
+        b[k+j*n] = b[k+j*n] - b[i+k*n] * b[i+j*n];
+      }
+      b[k+j*n] = b[k+j*n] / b[k+k*n];
+    }
+
+    s = b[j+j*n];
+    for ( i = 0; i <= j-1; i++ )
+    {
+      s = s - b[i+j*n] * b[i+j*n];
+    }
+
+    if ( s <= 0.0 )
+    {
+      delete [] b;
+      return NULL;
+    }
+
+    b[j+j*n] = sqrt ( s );
+  }
+
+  //
+//  Since the Cholesky factor is in R8GE format, zero out the lower triangle.
+//
+  for ( i = 0; i < n; i++ )
+  {
+    for ( j = 0; j < i; j++ )
+    {
+      b[i+j*n] = 0.0;
+    }
+  }
+
+  return b;
+}
+
+double *cv::softcascade::DetectorFast::r8vec_normal_01_new ( int n, int *seed )
+{
+# define PI 3.141592653589793
+
+  int i;
+  int m;
+  static int made = 0;
+  double *r;
+  static int saved = 0;
+  double *x;
+  int x_hi;
+  int x_lo;
+  static double y = 0.0;
+
+  x = new double[n];
+//
+//  I'd like to allow the user to reset the internal data.
+//  But this won't work properly if we have a saved value Y.
+//  I'm making a crock option that allows the user to signal
+//  explicitly that any internal memory should be flushed,
+//  by passing in a negative value for N.
+//
+  if ( n < 0 )
+  {
+    made = 0;
+    saved = 0;
+    y = 0.0;
+    return NULL;
+  }
+  else if ( n == 0 )
+  {
+    return NULL;
+  }
+//
+//  Record the range of X we need to fill in.
+//
+  x_lo = 1;
+  x_hi = n;
+//
+//  Use up the old value, if we have it.
+//
+  if ( saved == 1 )
+  {
+    x[0] = y;
+    saved = 0;
+    x_lo = 2;
+  }
+//
+//  Maybe we don't need any more values.
+//
+  if ( x_hi - x_lo + 1 == 0 )
+  {
+  }
+//
+//  If we need just one new value, do that here to avoid null arrays.
+//
+  else if ( x_hi - x_lo + 1 == 1 )
+  {
+    r = r8vec_uniform_01_new ( 2, seed );
+
+    x[x_hi-1] = sqrt ( - 2.0 * log ( r[0] ) ) * cos ( 2.0 * PI * r[1] );
+    y =         sqrt ( - 2.0 * log ( r[0] ) ) * sin ( 2.0 * PI * r[1] );
+
+    saved = 1;
+
+    made = made + 2;
+
+    delete [] r;
+  }
+//
+//  If we require an even number of values, that's easy.
+//
+  else if ( ( x_hi - x_lo + 1 ) % 2 == 0 )
+  {
+    m = ( x_hi - x_lo + 1 ) / 2;
+
+    r = r8vec_uniform_01_new ( 2*m, seed );
+
+    for ( i = 0; i <= 2*m-2; i = i + 2 )
+    {
+      x[x_lo+i-1] = sqrt ( - 2.0 * log ( r[i] ) ) * cos ( 2.0 * PI * r[i+1] );
+      x[x_lo+i  ] = sqrt ( - 2.0 * log ( r[i] ) ) * sin ( 2.0 * PI * r[i+1] );
+    }
+    made = made + x_hi - x_lo + 1;
+
+    delete [] r;
+  }
+//
+//  If we require an odd number of values, we generate an even number,
+//  and handle the last pair specially, storing one in X(N), and
+//  saving the other for later.
+//
+  else
+  {
+    x_hi = x_hi - 1;
+
+    m = ( x_hi - x_lo + 1 ) / 2 + 1;
+
+    r = r8vec_uniform_01_new ( 2*m, seed );
+
+    for ( i = 0; i <= 2*m-4; i = i + 2 )
+    {
+      x[x_lo+i-1] = sqrt ( - 2.0 * log ( r[i] ) ) * cos ( 2.0 * PI * r[i+1] );
+      x[x_lo+i  ] = sqrt ( - 2.0 * log ( r[i] ) ) * sin ( 2.0 * PI * r[i+1] );
+    }
+
+    i = 2*m - 2;
+
+    x[x_lo+i-1] = sqrt ( - 2.0 * log ( r[i] ) ) * cos ( 2.0 * PI * r[i+1] );
+    y           = sqrt ( - 2.0 * log ( r[i] ) ) * sin ( 2.0 * PI * r[i+1] );
+
+    saved = 1;
+
+    made = made + x_hi - x_lo + 2;
+
+    delete [] r;
+  }
+
+  return x;
+}
+
+double *cv::softcascade::DetectorFast::multinormal_sample( int m, int n, double a[], double mu[], int *seed )
+{
+  int i;
+  int j;
+  int k;
+  double *r;
+  double *x;
+  double *y;
+//
+//  Compute the upper triangular Cholesky factor R of the variance-covariance
+//  matrix.
+//
+  r = r8po_fa( m, a );
+
+  if ( !r )
+  {
+    std::cout << "\n";
+    std::cout << "MULTINORMAL_SAMPLE - Fatal error!\n";
+    std::cout << "  The variance-covariance matrix is not positive definite symmetric.\n";
+    exit ( 1 );
+  }
+//
+//  Y = MxN matrix of samples of the 1D normal distribution with mean 0
+//  and variance 1.
+//
+  y = r8vec_normal_01_new ( m*n, seed );
+//
+//  Compute X = MU + R' * Y.
+//
+  x = new double[m*n];
+
+  for ( j = 0; j < n; j++ )
+  {
+    for ( i = 0; i < m; i++ )
+    {
+      x[i+j*m] = mu[i];
+      for ( k = 0; k < m; k++ )
+      {
+        x[i+j*m] = x[i+j*m] + r[k+i*m] * y[k+j*m];
+      }
+    }
+  }
+
+  delete [] r;
+  delete [] y;
+
+  return x;
+}
+
+//---------------------------------------------------------
+
 
 bool cv::softcascade::DetectorFast::load(const FileNode& cascadeModel,const FileNode& fastModel)
 {
@@ -1181,15 +1477,15 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector
 
         	int remainingSamp=cvCeil(fastModel.paramDtFast.gamma*pyramidSize*blocks[b].energy*blocks[b].levelsHist[it-fld.levels.begin()]);
 
-        	//std::cout<< " n° dw to extract: "<< remainingSamp<<std::endl;
+//        	std::cout<< " n° dw to extract: "<< remainingSamp<<std::endl;
         	if(remainingSamp==0)
         		break;
 
 
-        	// Uniform sampling ( avg=(-1,-1) )
-        	if(blocks[b].locationsHist[it-fld.levels.begin()].avg.at<double>(0,0)==-1. ||
-        	   blocks[b].locationsHist[it-fld.levels.begin()].avg.at<double>(1,0)==-1.){
-
+        	 //Uniform sampling ( avg=(-1,-1) )
+/*        	if(blocks[b].locationsHist[it-fld.levels.begin()].avg.at<double>(0,0)==-1. ||
+        	   blocks[b].locationsHist[it-fld.levels.begin()].avg.at<double>(0,1)==-1.){
+*/
         	 //std::cout<<"\t \t Block "<<b<< "\t Uniform Sampling ("<<remainingSamp<<")"<<std::endl;
 
         		int startX = cvRound((double)(blocks[b].rect.x)/fields->shrinkage);
@@ -1203,7 +1499,7 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector
         		if(stepX<1)
         			stepX=1;
 
-        		int stepY=cvRound(((double)(endY-startY+1)/(endX-startX+1))*stepX);
+        		int stepY=cvRound((double)(endY-startY+1)/std::sqrt(remainingSamp));
         		if(stepY<1)
         			stepY=1;
 
@@ -1221,19 +1517,21 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector
                     }
                 }
         		continue;
-        	}
+//        	}
 
 
         	// Random Sampling
-/*
-        	std::cout<<"\t \t Block "<<b<< "\t Random Sampling ("<<remainingSamp<<") ";
+
+/*      	std::cout<<"\t \t Block "<<b<< "\t Random Sampling ("<<remainingSamp<<") ";
     		std::cout<<"Average("<< blocks[b].locationsHist[it-fld.levels.begin()].avg.at<double>(0,0)<<","
-    								<<blocks[b].locationsHist[it-fld.levels.begin()].avg.at<double>(1,0)<<") ";
+    								<<blocks[b].locationsHist[it-fld.levels.begin()].avg.at<double>(0,1)<<") ";
 
-			std::cout<<"Std ("<< blocks[b].locationsHist[it-fld.levels.begin()].std.at<double>(0,0)<<","
-    								<<blocks[b].locationsHist[it-fld.levels.begin()].std.at<double>(1,0)<<")"<<std::endl;
+			std::cout<<"Cov ("<< blocks[b].locationsHist[it-fld.levels.begin()].cov.at<double>(0,0)<<","
+    								<<blocks[b].locationsHist[it-fld.levels.begin()].cov.at<double>(0,1)<<","
+    								<<blocks[b].locationsHist[it-fld.levels.begin()].cov.at<double>(1,0)<<","
+    								<<blocks[b].locationsHist[it-fld.levels.begin()].cov.at<double>(1,1)<<")"<<std::endl;
 
-			std::cout<<"Level width:"<<level.workRect.width<<"; Level height:"<<level.workRect.height<<std::endl;
+			std::cout<<"Level"<<it-fld.levels.begin()<<" width:"<<level.workRect.width<<" height:"<<level.workRect.height<<std::endl;
 */
 
 
@@ -1247,25 +1545,25 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector
 
 
         		// sampling
-        		Mat sampling(1,remainingSamp,CV_32SC2);
-        		//Mat uSampling;
-        		cv::randn(sampling,blocks[b].locationsHist[it-fld.levels.begin()].avg,blocks[b].locationsHist[it-fld.levels.begin()].std);
-
+        		//Mat sampling(1,remainingSamp,CV_32SC2);
+        		//        		cv::randn(sampling,blocks[b].locationsHist[it-fld.levels.begin()].avg,blocks[b].locationsHist[it-fld.levels.begin()].cov);
+        		int seed=time(NULL);
+        		double* sampling= multinormal_sample(2, remainingSamp, blocks[b].locationsHist[it-fld.levels.begin()].cov.ptr<double>(0),
+        				blocks[b].locationsHist[it-fld.levels.begin()].avg.ptr<double>(0), &seed);
 
 /*
+
        		std::cout<<" samples: ";
-        		int* ptrT=(int*)(sampling.ptr(0));
-        		for(int cols=0; cols<sampling.cols;cols++){
-            		std::cout<<"("<<ptrT[2*cols]<< " , "<< ptrT[2*cols+1]<< ")  ";
+        		for(int cols=0; cols<remainingSamp;cols++){
+            		std::cout<<"("<<sampling[2*cols]<< " , "<< sampling[2*cols+1]<< ")  ";
         		}
         		std::cout<<std::endl;
 */
 
         		// Rescale upperLeftpoints by shrinkage
-        		int* ptrT=(int*)(sampling.ptr(0));
-        		for(int cols=0; cols<sampling.cols;cols++){
-        			ptrT[2*cols]= cvRound((double)(ptrT[2*cols])/(fld.shrinkage));
-        			ptrT[2*cols+1]=cvRound((double)(ptrT[2*cols+1])/(fld.shrinkage));
+        		for(int i=0; i<remainingSamp;i++){
+        			sampling[2*i]=  (sampling[2*i])/(fld.shrinkage);
+        			sampling[2*i+1]=(sampling[2*i+1])/(fld.shrinkage);
         		}
 
 
@@ -1282,22 +1580,24 @@ void cv::softcascade::DetectorFast::detectFast(cv::InputArray _image,std::vector
 */
         		//std::cout<< "Sampling extracted - "<<sampling.cols<<" , ";
 
-        		int* colsPtr= (int*)(sampling.ptr(0));
+
 
 
 //    			std::cout<<"\t \t \t Point included in dw: ";
-        		for(int cols=0;cols<sampling.cols;cols++){
+        		for(int i=0; i<remainingSamp;i++){
 
-        			if (colsPtr[2*cols]<0. || colsPtr[2*cols+1]<0.)
+        			if (sampling[2*i]<0. || sampling[2*i+1]<0.)
         				continue;
 
-       // 			std::cout<<"("<<colsPtr[2*cols] << ","<<colsPtr[2*cols+1]<<") ";
-        			if(colsPtr[2*cols]< level.workRect.width && colsPtr[2*cols+1]<level.workRect.height){
-        				dw.insert(Point2i(colsPtr[2*cols],colsPtr[2*cols+1]));
-//        				std::cout<<" OK (dw.size "<<dw.size()<<") ";
+
+        			cvRound(ceil(sampling[2*i]));
+        			if(cvRound(ceil(sampling[2*i]))< level.workRect.width && cvRound(ceil(sampling[2*i+1]))<level.workRect.height){
+        				dw.insert(Point2i(cvRound(ceil(sampling[2*i])),cvRound(ceil(sampling[2*i+1]))));
+//        				std::cout<<"("<<colsPtr[2*cols] << ","<<colsPtr[2*cols+1]<<") ";
         			}
 
         		}
+        		delete[] sampling;
 /*
         		std::cout<<std::endl;
         		std::cout<< "\t \t \t Tot. dw extracted: "<<dw.size()<<std::endl;

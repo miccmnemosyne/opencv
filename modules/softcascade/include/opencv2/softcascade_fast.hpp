@@ -113,25 +113,25 @@ struct CV_EXPORTS FastDtModel
     uint	numImages;
     Size	imgSize;
 
-	struct AverageStd{
-		AverageStd(){};
-		AverageStd(Mat a, Mat c): avg(a),std(c){};
+	struct AverageCov{
+		AverageCov(){};
+		AverageCov(Mat a, Mat c): avg(a),cov(c){};
 
 		Mat avg;
-		Mat std;
+		Mat cov;
 	};
 
 	struct Block{
 		Block(uint levels)
 		:levelsHist(std::vector<double>(levels,0.)),
-		locationsHist(std::vector<AverageStd>(levels,AverageStd())),
+		locationsHist(std::vector<AverageCov>(levels,AverageCov())),
 		energy(0.){};
 
-		Block(std::vector<double> lvH,std::vector<AverageStd> locH, Rect rt, double e)
+		Block(std::vector<double> lvH,std::vector<AverageCov> locH, Rect rt, double e)
 		:levelsHist(lvH), locationsHist(locH), rect(rt), energy(e){};
 
 		std::vector<double>  	levelsHist;
-		std::vector<AverageStd> locationsHist;
+		std::vector<AverageCov> locationsHist;
 		Rect rect;
 		double 					energy;
  	};
@@ -178,7 +178,7 @@ private:
     	static const char *const GEOMMODEL_GRID_BLOCKS_LEVELSH;
     	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH;
     	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG;
-    	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_STD;
+    	static const char *const GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV;
     	static const char *const GEOMMODEL_GRID_BLOCKS_RECT;
     	static const char *const GEOMMODEL_GRID_BLOCKS_ENERGY;
 
@@ -236,7 +236,7 @@ const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_ID="id";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LEVELSH="levelsHist";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH="locationsHist";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_AVG="averages";
-const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_STD="standardDev";
+const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_LOCATIONSH_COV="covariances";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_RECT="rect";
 const char *const FastDtModel::GeomModel::GEOMMODEL_GRID_BLOCKS_ENERGY="energy";
 
@@ -292,6 +292,12 @@ private:
     // Load trace-model
     CV_WRAP virtual bool loadModel(const FileNode& fastNode);
 
+    // random sampling by normal distribution
+    double *r8vec_uniform_01_new ( int n, int *seed);
+    double *r8po_fa ( int n, double a[]);
+    double *r8vec_normal_01_new ( int n, int *seed);
+    double *multinormal_sample( int m, int n, double a[], double mu[], int *seed);
+
 
 	struct CV_EXPORTS TempInfo{
     	int rejCriteria;
@@ -305,10 +311,12 @@ private:
 };
 struct classPoint2iComp{
 	inline bool operator()(const Point2i& a, const Point2i& b){
-		return (a.x<b.x)&&(a.y!=b.y);
+		return (a.x<=b.x)&&(a.y!=b.y);
 
 	}
 };
+
+
 
 
 // ============================================================================================================== //

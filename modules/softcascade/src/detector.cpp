@@ -43,7 +43,7 @@
 #include "precomp.hpp"
 #include "opencv2/softcascade_fast.hpp"
 #include <opencv2/imgproc.hpp>
-#include <iostream>
+#include <iostream> 
 
 cv::softcascade::Detection::Detection(const cv::Rect& b, const float c, int k)
 : x(static_cast<ushort>(b.x)), y(static_cast<ushort>(b.y)),

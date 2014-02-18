@@ -41,6 +41,7 @@
 //M*/
 
 #include "precomp.hpp"
+#include "opencl_kernels.hpp"
 
 ///////////////////////////////// UMat implementation ///////////////////////////////
 
@@ -53,6 +54,17 @@ static Mutex umatLocks[UMAT_NLOCKS];
 UMatData::UMatData(const MatAllocator* allocator)
 {
     prevAllocator = currAllocator = allocator;
+    urefcount = refcount = 0;
+    data = origdata = 0;
+    size = 0;
+    flags = 0;
+    handle = 0;
+    userdata = 0;
+}
+
+UMatData::~UMatData()
+{
+    prevAllocator = currAllocator = 0;
     urefcount = refcount = 0;
     data = origdata = 0;
     size = 0;
@@ -74,7 +86,9 @@ void UMatData::unlock()
 
 MatAllocator* UMat::getStdAllocator()
 {
-    return ocl::getOpenCLAllocator();
+    if( ocl::haveOpenCL() )
+        return ocl::getOpenCLAllocator();
+    return Mat::getStdAllocator();
 }
 
 void swap( UMat& a, UMat& b )
@@ -174,8 +188,8 @@ static void updateContinuityFlag(UMat& m)
             break;
     }
 
-    uint64 t = (uint64)m.step[0]*m.size[0];
-    if( j <= i && t == (size_t)t )
+    uint64 total = (uint64)m.step[0]*m.size[0];
+    if( j <= i && total == (size_t)total )
         m.flags |= UMat::CONTINUOUS_FLAG;
     else
         m.flags &= ~UMat::CONTINUOUS_FLAG;
@@ -194,13 +208,24 @@ static void finalizeHdr(UMat& m)
 UMat Mat::getUMat(int accessFlags) const
 {
     UMat hdr;
-    if(!u)
+    if(!data)
         return hdr;
-    UMat::getStdAllocator()->allocate(u, accessFlags);
+    UMatData* temp_u = u;
+    if(!temp_u)
+    {
+        MatAllocator *a = allocator, *a0 = getStdAllocator();
+        if(!a)
+            a = a0;
+        temp_u = a->allocate(dims, size.p, type(), data, step.p, accessFlags);
+        temp_u->refcount = 1;
+    }
+    UMat::getStdAllocator()->allocate(temp_u, accessFlags);
+    hdr.flags = flags;
     setSize(hdr, dims, size.p, step.p);
     finalizeHdr(hdr);
-    hdr.u = u;
+    hdr.u = temp_u;
     hdr.offset = data - datastart;
+    hdr.addref();
     return hdr;
 }
 
@@ -235,19 +260,20 @@ void UMat::create(int d, const int* _sizes, int _type)
             a = a0;
         try
         {
-            u = a->allocate(dims, size, _type, step.p);
+            u = a->allocate(dims, size, _type, 0, step.p, 0);
             CV_Assert(u != 0);
         }
         catch(...)
         {
             if(a != a0)
-                u = a0->allocate(dims, size, _type, step.p);
+                u = a0->allocate(dims, size, _type, 0, step.p, 0);
             CV_Assert(u != 0);
         }
         CV_Assert( step[dims-1] == (size_t)CV_ELEM_SIZE(flags) );
     }
 
     finalizeHdr(*this);
+    addref();
 }
 
 void UMat::copySize(const UMat& m)
@@ -260,9 +286,18 @@ void UMat::copySize(const UMat& m)
     }
 }
 
+
+UMat::~UMat()
+{
+    release();
+    if( step.p != step.buf )
+        fastFree(step.p);
+}
+
 void UMat::deallocate()
 {
     u->currAllocator->deallocate(u);
+    u = NULL;
 }
 
 
@@ -544,20 +579,25 @@ Mat UMat::getMat(int accessFlags) const
 {
     if(!u)
         return Mat();
-    u->currAllocator->map(u, accessFlags);
+    u->currAllocator->map(u, accessFlags | ACCESS_READ);
     CV_Assert(u->data != 0);
     Mat hdr(dims, size.p, type(), u->data + offset, step.p);
+    hdr.flags = flags;
     hdr.u = u;
-    hdr.datastart = hdr.data = u->data;
+    hdr.datastart = u->data;
+    hdr.data = hdr.datastart + offset;
     hdr.datalimit = hdr.dataend = u->data + u->size;
     CV_XADD(&hdr.u->refcount, 1);
     return hdr;
 }
 
-void* UMat::handle(int /*accessFlags*/) const
+void* UMat::handle(int accessFlags) const
 {
     if( !u )
         return 0;
+
+    if ((accessFlags & ACCESS_WRITE) != 0)
+        u->markHostCopyObsolete(true);
 
     // check flags: if CPU copy is newer, copy it back to GPU.
     if( u->deviceCopyObsolete() )
@@ -565,12 +605,6 @@ void* UMat::handle(int /*accessFlags*/) const
         CV_Assert(u->refcount == 0);
         u->currAllocator->unmap(u);
     }
-    /*else if( u->refcount > 0 && (accessFlags & ACCESS_WRITE) )
-    {
-        CV_Error(Error::StsError,
-                 "it's not allowed to access UMat handle for writing "
-                 "while it's mapped; call Mat::release() first for all its mappings");
-    }*/
     return u->handle;
 }
 
@@ -613,11 +647,10 @@ void UMat::copyTo(OutputArray _dst) const
     if( _dst.kind() == _InputArray::UMAT )
     {
         UMat dst = _dst.getUMat();
-        void* srchandle = handle(ACCESS_READ);
-        void* dsthandle = dst.handle(ACCESS_WRITE);
-        if( srchandle == dsthandle && dst.offset == offset )
+        if( u == dst.u && dst.offset == offset )
             return;
-        ndoffset(dstofs);
+        dst.ndoffset(dstofs);
+        dstofs[dims-1] *= esz;
         CV_Assert(u->currAllocator == dst.u->currAllocator);
         u->currAllocator->copy(u, dst.u, dims, sz, srcofs, step.p, dstofs, dst.step.p, false);
     }
@@ -628,14 +661,137 @@ void UMat::copyTo(OutputArray _dst) const
     }
 }
 
-void UMat::convertTo(OutputArray, int, double, double) const
+void UMat::copyTo(OutputArray _dst, InputArray _mask) const
 {
-    CV_Error(Error::StsNotImplemented, "");
+    if( _mask.empty() )
+    {
+        copyTo(_dst);
+        return;
+    }
+
+    int cn = channels(), mtype = _mask.type(), mdepth = CV_MAT_DEPTH(mtype), mcn = CV_MAT_CN(mtype);
+    CV_Assert( mdepth == CV_8U && (mcn == 1 || mcn == cn) );
+
+    if (ocl::useOpenCL() && _dst.isUMat() && dims <= 2)
+    {
+        UMatData * prevu = _dst.getUMat().u;
+        _dst.create( dims, size, type() );
+
+        UMat dst = _dst.getUMat();
+
+        if( prevu != dst.u ) // do not leave dst uninitialized
+            dst = Scalar(0);
+
+        ocl::Kernel k("copyToMask", ocl::core::copyset_oclsrc,
+                      format("-D COPY_TO_MASK -D T=%s -D scn=%d -D mcn=%d",
+                             ocl::memopTypeToStr(depth()), cn, mcn));
+        if (!k.empty())
+        {
+            k.args(ocl::KernelArg::ReadOnlyNoSize(*this), ocl::KernelArg::ReadOnlyNoSize(_mask.getUMat()),
+                   ocl::KernelArg::WriteOnly(dst));
+
+            size_t globalsize[2] = { cols, rows };
+            if (k.run(2, globalsize, NULL, false))
+                return;
+        }
+    }
+
+    Mat src = getMat(ACCESS_READ);
+    src.copyTo(_dst, _mask);
 }
 
-UMat& UMat::operator = (const Scalar&)
+void UMat::convertTo(OutputArray _dst, int _type, double alpha, double beta) const
 {
-    CV_Error(Error::StsNotImplemented, "");
+    bool noScale = std::fabs(alpha - 1) < DBL_EPSILON && std::fabs(beta) < DBL_EPSILON;
+    int stype = type(), cn = CV_MAT_CN(stype);
+
+    if( _type < 0 )
+        _type = _dst.fixedType() ? _dst.type() : stype;
+    else
+        _type = CV_MAKETYPE(CV_MAT_DEPTH(_type), cn);
+
+    int sdepth = CV_MAT_DEPTH(stype), ddepth = CV_MAT_DEPTH(_type);
+    if( sdepth == ddepth && noScale )
+    {
+        copyTo(_dst);
+        return;
+    }
+
+    bool doubleSupport = ocl::Device::getDefault().doubleFPConfig() > 0;
+    bool needDouble = sdepth == CV_64F || ddepth == CV_64F;
+    if( dims <= 2 && cn && _dst.isUMat() && ocl::useOpenCL() &&
+            ((needDouble && doubleSupport) || !needDouble) )
+    {
+        char cvt[40];
+        ocl::Kernel k("convertTo", ocl::core::convert_oclsrc,
+                      format("-D srcT=%s -D dstT=%s -D convertToDT=%s%s", ocl::typeToStr(sdepth),
+                             ocl::typeToStr(ddepth), ocl::convertTypeStr(CV_32F, ddepth, 1, cvt),
+                             doubleSupport ? " -D DOUBLE_SUPPORT" : ""));
+        if (!k.empty())
+        {
+            _dst.create( size(), _type );
+            UMat dst = _dst.getUMat();
+
+            float alphaf = (float)alpha, betaf = (float)beta;
+            k.args(ocl::KernelArg::ReadOnlyNoSize(*this), ocl::KernelArg::WriteOnly(dst, cn), alphaf, betaf);
+
+            size_t globalsize[2] = { dst.cols * cn, dst.rows };
+            if (k.run(2, globalsize, NULL, false))
+                return;
+        }
+    }
+
+    Mat m = getMat(ACCESS_READ);
+    m.convertTo(_dst, _type, alpha, beta);
+}
+
+UMat& UMat::setTo(InputArray _value, InputArray _mask)
+{
+    bool haveMask = !_mask.empty();
+    int tp = type(), cn = CV_MAT_CN(tp);
+    if( dims <= 2 && cn <= 4 && cn != 3 && ocl::useOpenCL() )
+    {
+        Mat value = _value.getMat();
+        CV_Assert( checkScalar(value, type(), _value.kind(), _InputArray::UMAT) );
+        double buf[4];
+        convertAndUnrollScalar(value, tp, (uchar*)buf, 1);
+
+        char opts[1024];
+        sprintf(opts, "-D dstT=%s", ocl::memopTypeToStr(tp));
+
+        ocl::Kernel setK(haveMask ? "setMask" : "set", ocl::core::copyset_oclsrc, opts);
+        if( !setK.empty() )
+        {
+            ocl::KernelArg scalararg(0, 0, 0, buf, CV_ELEM_SIZE(tp));
+            UMat mask;
+
+            if( haveMask )
+            {
+                mask = _mask.getUMat();
+                CV_Assert( mask.size() == size() && mask.type() == CV_8U );
+                ocl::KernelArg maskarg = ocl::KernelArg::ReadOnlyNoSize(mask);
+                ocl::KernelArg dstarg = ocl::KernelArg::ReadWrite(*this);
+                setK.args(maskarg, dstarg, scalararg);
+            }
+            else
+            {
+                ocl::KernelArg dstarg = ocl::KernelArg::WriteOnly(*this);
+                setK.args(dstarg, scalararg);
+            }
+
+            size_t globalsize[] = { cols, rows };
+            if( setK.run(2, globalsize, 0, false) )
+                return *this;
+        }
+    }
+    Mat m = getMat(haveMask ? ACCESS_RW : ACCESS_WRITE);
+    m.setTo(_value, _mask);
+    return *this;
+}
+
+UMat& UMat::operator = (const Scalar& s)
+{
+    setTo(s);
     return *this;
 }
 

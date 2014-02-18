@@ -156,6 +156,9 @@ CV_IMPL CvCapture * cvCreateCameraCapture (int index)
 #ifdef HAVE_GIGE_API
         CV_CAP_GIGANETIX,
 #endif
+#ifdef HAVE_INTELPERC
+        CV_CAP_INTELPERC,
+#endif
         -1
     };
 
@@ -193,6 +196,7 @@ CV_IMPL CvCapture * cvCreateCameraCapture (int index)
     defined(HAVE_AVFOUNDATION) || \
     defined(HAVE_ANDROID_NATIVE_CAMERA) || \
     defined(HAVE_GIGE_API) || \
+    defined(HAVE_INTELPERC)    || \
     (0)
         // local variable to memorize the captured device
         CvCapture *capture;
@@ -342,6 +346,13 @@ CV_IMPL CvCapture * cvCreateCameraCapture (int index)
         break; // CV_CAP_GIGANETIX
 #endif
 
+#ifdef HAVE_INTELPERC
+        case CV_CAP_INTELPERC:
+            capture = cvCreateCameraCapture_IntelPerC(index);
+            if (capture)
+                return capture;
+        break; // CV_CAP_INTEL_PERC
+#endif
         }
     }
 
@@ -515,7 +526,7 @@ bool VideoCapture::grab()
     return cvGrabFrame(cap) != 0;
 }
 
-bool VideoCapture::retrieve(Mat& image, int channel)
+bool VideoCapture::retrieve(OutputArray image, int channel)
 {
     IplImage* _img = cvRetrieveFrame(cap, channel);
     if( !_img )
@@ -533,7 +544,7 @@ bool VideoCapture::retrieve(Mat& image, int channel)
     return true;
 }
 
-bool VideoCapture::read(Mat& image)
+bool VideoCapture::read(OutputArray image)
 {
     if(grab())
         retrieve(image);
@@ -543,6 +554,12 @@ bool VideoCapture::read(Mat& image)
 }
 
 VideoCapture& VideoCapture::operator >> (Mat& image)
+{
+    read(image);
+    return *this;
+}
+
+VideoCapture& VideoCapture::operator >> (UMat& image)
 {
     read(image);
     return *this;

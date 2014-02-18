@@ -46,7 +46,8 @@
 #ifndef __OPENCV_OCL_PRIVATE_UTIL__
 #define __OPENCV_OCL_PRIVATE_UTIL__
 
-#include "opencv2/ocl/cl_runtime/cl_runtime.hpp"
+#include "opencv2/core/opencl/runtime/opencl_core.hpp"
+#include "opencv2/core/ocl_genbase.hpp"
 
 #include "opencv2/ocl.hpp"
 
@@ -54,13 +55,6 @@ namespace cv
 {
 namespace ocl
 {
-
-struct ProgramEntry
-{
-    const char* name;
-    const char* programStr;
-    const char* programHash;
-};
 
 inline cl_device_id getClDeviceID(const Context *ctx)
 {
